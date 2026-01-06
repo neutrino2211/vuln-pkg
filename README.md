@@ -1,10 +1,19 @@
 # vuln-pkg
 
-A package manager for deliberately-vulnerable applications used in security training and penetration testing.
+**The NPM for your home lab.**
+
+One command to spin up any vulnerable application for security training. No configuration, no port conflicts, no hassle.
+
+```bash
+vuln-pkg run dvwa
+# That's it. DVWA is now running at http://dvwa.127.0.0.1.sslip.io
+```
 
 ## Overview
 
-vuln-pkg makes it easy to run intentionally vulnerable web applications locally for security training, CTF practice, or penetration testing labs. It handles Docker container management and uses Traefik as a reverse proxy to provide clean subdomain-based URLs.
+vuln-pkg is a package manager for deliberately-vulnerable applications used in security training and penetration testing. Think of it as `npm install` but for security labs - browse a catalog of intentionally vulnerable apps, pick one, and have it running in seconds with a clean URL.
+
+Whether you're practicing for OSCP, running a CTF, or teaching a security workshop, vuln-pkg eliminates the friction of setting up vulnerable environments. It handles Docker containers, networking, and DNS automatically so you can focus on hacking, not infrastructure.
 
 **Key Features:**
 - Zero-config DNS via sslip.io - works immediately without any local DNS setup
@@ -17,21 +26,47 @@ vuln-pkg makes it easy to run intentionally vulnerable web applications locally 
 ## Requirements
 
 - Docker (running)
-- Rust toolchain (for building from source)
 
 ## Installation
 
+### Quick Install (Recommended)
+
 ```bash
-# Clone and build
-git clone https://github.com/yourusername/vuln-pkg.git
+curl -fsSL https://raw.githubusercontent.com/neutrino2211/vuln-pkg/main/install.sh | bash
+```
+
+This will automatically detect your OS and architecture, download the latest release, and install it to `/usr/local/bin` (or `~/.local/bin` if you don't have write access).
+
+#### Install Options
+
+```bash
+# Install a specific version
+VULN_PKG_VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/neutrino2211/vuln-pkg/main/install.sh | bash
+
+# Install to a custom directory
+VULN_PKG_INSTALL_DIR=~/bin curl -fsSL https://raw.githubusercontent.com/neutrino2211/vuln-pkg/main/install.sh | bash
+```
+
+### Download from Releases
+
+Download pre-built binaries from the [GitHub Releases](https://github.com/neutrino2211/vuln-pkg/releases) page.
+
+Available binaries:
+- `vuln-pkg-linux-x86_64-musl.tar.gz` - Linux x86_64 (static binary, works on any distro)
+- `vuln-pkg-linux-aarch64.tar.gz` - Linux ARM64
+- `vuln-pkg-darwin-x86_64.tar.gz` - macOS Intel
+- `vuln-pkg-darwin-aarch64.tar.gz` - macOS Apple Silicon
+
+### Build from Source
+
+Requires the Rust toolchain.
+
+```bash
+git clone https://github.com/neutrino2211/vuln-pkg.git
 cd vuln-pkg
 cargo build --release
 
-# The binary will be at target/release/vuln-pkg
-
-# Optional: Static musl build for Linux x86_64
-rustup target add x86_64-unknown-linux-musl
-cargo build --release --target x86_64-unknown-linux-musl
+# Binary will be at target/release/vuln-pkg
 ```
 
 ## Quick Start

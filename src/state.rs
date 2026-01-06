@@ -70,9 +70,8 @@ pub struct StateManager {
 
 impl StateManager {
     pub fn new() -> Result<Self> {
-        let home = dirs_home().ok_or_else(|| {
-            VulnPkgError::State("Could not determine home directory".to_string())
-        })?;
+        let home = dirs_home()
+            .ok_or_else(|| VulnPkgError::State("Could not determine home directory".to_string()))?;
         let base_dir = home.join(STATE_DIR);
         Ok(Self { base_dir })
     }
@@ -137,11 +136,7 @@ impl StateManager {
     pub fn get_cached_manifest(&self, url: &str) -> Option<PathBuf> {
         let filename = url_to_filename(url);
         let path = self.manifests_dir().join(filename);
-        if path.exists() {
-            Some(path)
-        } else {
-            None
-        }
+        if path.exists() { Some(path) } else { None }
     }
 }
 

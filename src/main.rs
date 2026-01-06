@@ -47,21 +47,27 @@ async fn run(cli: Cli, output: &Output) -> Result<()> {
     state_mgr.init()?;
 
     // Resolve domain: use provided domain or generate sslip.io domain for zero-config
-    let domain = cli.domain.unwrap_or_else(|| sslip_domain(cli.resolve_address));
+    let domain = cli
+        .domain
+        .unwrap_or_else(|| sslip_domain(cli.resolve_address));
 
     match cli.command {
         Commands::List => cmd_list(&cli.manifest_url, &state_mgr, output).await,
         Commands::Install { app } => cmd_install(&app, &cli.manifest_url, &state_mgr, output).await,
         Commands::Run { app } => {
-            cmd_run(&app, &cli.manifest_url, &state_mgr, output, &domain, cli.https).await
+            cmd_run(
+                &app,
+                &cli.manifest_url,
+                &state_mgr,
+                output,
+                &domain,
+                cli.https,
+            )
+            .await
         }
         Commands::Stop { app } => cmd_stop(&app, &state_mgr, output).await,
-        Commands::Remove { app, purge } => {
-            cmd_remove(&app, &state_mgr, output, purge).await
-        }
-        Commands::Rebuild { app } => {
-            cmd_rebuild(&app, &cli.manifest_url, &state_mgr, output).await
-        }
+        Commands::Remove { app, purge } => cmd_remove(&app, &state_mgr, output, purge).await,
+        Commands::Rebuild { app } => cmd_rebuild(&app, &cli.manifest_url, &state_mgr, output).await,
         Commands::Status => cmd_status(&state_mgr, output).await,
     }
 }
@@ -140,12 +146,12 @@ async fn cmd_install(
         }
         PackageType::Git => {
             // Build from git repository
-            let repo = app
-                .repo
-                .as_ref()
-                .ok_or_else(|| VulnPkgError::ManifestValidation(
-                    format!("Git app '{}' missing repo field", app_name)
-                ))?;
+            let repo = app.repo.as_ref().ok_or_else(|| {
+                VulnPkgError::ManifestValidation(format!(
+                    "Git app '{}' missing repo field",
+                    app_name
+                ))
+            })?;
 
             let commit = docker
                 .build_from_git(
@@ -222,14 +228,21 @@ async fn cmd_run(
     // Ensure Traefik is running
     if docker.is_traefik_running().await?.is_none() {
         output.info("Starting Traefik reverse proxy");
-        let traefik_id = docker.start_traefik(&network_id, domain, https, output).await?;
+        let traefik_id = docker
+            .start_traefik(&network_id, domain, https, output)
+            .await?;
         state.traefik_container_id = Some(traefik_id);
-        output.success(&format!("Traefik running (dashboard: http://traefik.{})", domain));
+        output.success(&format!(
+            "Traefik running (dashboard: http://traefik.{})",
+            domain
+        ));
     }
 
     // Create and start container with Traefik labels
     output.info(&format!("Creating container for {}", app.name));
-    let (container_id, hostnames) = docker.create_container(app, &network_id, domain, https).await?;
+    let (container_id, hostnames) = docker
+        .create_container(app, &network_id, domain, https)
+        .await?;
 
     output.info("Starting container");
     docker.start_container(&container_id).await?;
@@ -247,11 +260,7 @@ async fn cmd_run(
     Ok(())
 }
 
-async fn cmd_stop(
-    app_name: &str,
-    state_mgr: &StateManager,
-    output: &Output,
-) -> Result<()> {
+async fn cmd_stop(app_name: &str, state_mgr: &StateManager, output: &Output) -> Result<()> {
     let mut state = state_mgr.load_state()?;
 
     let app_state = state
@@ -270,7 +279,10 @@ async fn cmd_stop(
 
     let docker = DockerManager::new()?;
 
-    output.info(&format!("Stopping container {}", &container_id[..12.min(container_id.len())]));
+    output.info(&format!(
+        "Stopping container {}",
+        &container_id[..12.min(container_id.len())]
+    ));
 
     if docker.container_running(&container_id).await? {
         docker.stop_container(&container_id).await?;
@@ -417,7 +429,10 @@ async fn cmd_status(state_mgr: &StateManager, output: &Output) -> Result<()> {
 
     for (name, app_state) in &state.apps {
         let running = if let Some(ref container_id) = app_state.container_id {
-            docker.container_running(container_id).await.unwrap_or(false)
+            docker
+                .container_running(container_id)
+                .await
+                .unwrap_or(false)
         } else {
             false
         };

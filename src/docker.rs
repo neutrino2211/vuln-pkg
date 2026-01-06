@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use bollard::Docker;
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
     StartContainerOptions, StopContainerOptions,
@@ -8,9 +9,8 @@ use bollard::container::{
 use bollard::image::{BuildImageOptions, CreateImageOptions};
 use bollard::models::{EndpointSettings, HostConfig, Mount, MountTypeEnum, PortBinding};
 use bollard::network::{CreateNetworkOptions, ListNetworksOptions};
-use bollard::Docker;
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use futures::StreamExt;
 use git2::Repository;
 use tar::Builder;
@@ -89,7 +89,10 @@ impl DockerManager {
 
         for container in containers {
             if let Some(names) = &container.names {
-                if names.iter().any(|n| n == &format!("/{}", TRAEFIK_CONTAINER)) {
+                if names
+                    .iter()
+                    .any(|n| n == &format!("/{}", TRAEFIK_CONTAINER))
+                {
                     let running = container.state.as_deref() == Some("running");
                     if running {
                         return Ok(container.id);
@@ -201,9 +204,7 @@ impl DockerManager {
             cmd: Some(cmd),
             host_config: Some(host_config),
             labels: Some(labels),
-            networking_config: Some(bollard::container::NetworkingConfig {
-                endpoints_config,
-            }),
+            networking_config: Some(bollard::container::NetworkingConfig { endpoints_config }),
             ..Default::default()
         };
 
@@ -516,12 +517,12 @@ impl DockerManager {
 
             // Fetch latest from origin (scope to drop remote before returning repo)
             {
-                let mut remote = repo
-                    .find_remote("origin")
-                    .map_err(|e| VulnPkgError::GitClone {
-                        repo: repo_url.to_string(),
-                        message: e.to_string(),
-                    })?;
+                let mut remote =
+                    repo.find_remote("origin")
+                        .map_err(|e| VulnPkgError::GitClone {
+                            repo: repo_url.to_string(),
+                            message: e.to_string(),
+                        })?;
 
                 remote
                     .fetch(&["refs/heads/*:refs/remotes/origin/*"], None, None)
@@ -595,7 +596,10 @@ impl DockerManager {
                 (app.name.clone(), app.name.clone())
             } else {
                 // Additional ports get app-port suffix
-                (format!("{}-{}", app.name, port), format!("{}-{}", app.name, port))
+                (
+                    format!("{}-{}", app.name, port),
+                    format!("{}-{}", app.name, port),
+                )
             };
 
             let hostname = format!("{}.{}", subdomain, domain);
@@ -615,7 +619,10 @@ impl DockerManager {
                 router_name.clone(),
             );
             labels.insert(
-                format!("traefik.http.services.{}.loadbalancer.server.port", router_name),
+                format!(
+                    "traefik.http.services.{}.loadbalancer.server.port",
+                    router_name
+                ),
                 port.to_string(),
             );
 
@@ -664,9 +671,7 @@ impl DockerManager {
             } else {
                 Some(app.env.clone())
             },
-            networking_config: Some(bollard::container::NetworkingConfig {
-                endpoints_config,
-            }),
+            networking_config: Some(bollard::container::NetworkingConfig { endpoints_config }),
             ..Default::default()
         };
 
@@ -688,7 +693,9 @@ impl DockerManager {
 
     pub async fn stop_container(&self, container_id: &str) -> Result<()> {
         let options = StopContainerOptions { t: 10 };
-        self.docker.stop_container(container_id, Some(options)).await?;
+        self.docker
+            .stop_container(container_id, Some(options))
+            .await?;
         Ok(())
     }
 
@@ -748,6 +755,9 @@ impl DockerManager {
 
     pub async fn count_running_apps(&self) -> Result<usize> {
         let containers = self.list_vuln_pkg_containers().await?;
-        Ok(containers.into_iter().filter(|(_, _, running)| *running).count())
+        Ok(containers
+            .into_iter()
+            .filter(|(_, _, running)| *running)
+            .count())
     }
 }

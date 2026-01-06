@@ -86,7 +86,10 @@ impl Output {
 
             self.json(&info);
         } else {
-            println!("\n{}", "Available Vulnerable Applications".bold().underline());
+            println!(
+                "\n{}",
+                "Available Vulnerable Applications".bold().underline()
+            );
             println!();
 
             for app in apps {
@@ -97,14 +100,26 @@ impl Output {
                     _ => "[AVAILABLE]".dimmed(),
                 };
 
-                println!("  {} {} {}", app.name.bold(), format!("v{}", app.version).dimmed(), status);
+                println!(
+                    "  {} {} {}",
+                    app.name.bold(),
+                    format!("v{}", app.version).dimmed(),
+                    status
+                );
 
                 if !app.description.is_empty() {
                     println!("    {}", app.description);
                 }
 
                 println!("    Image: {}", app.effective_image().cyan());
-                println!("    Ports: {}", app.ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", "));
+                println!(
+                    "    Ports: {}",
+                    app.ports
+                        .iter()
+                        .map(|p| p.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
 
                 if !app.cve_tags.is_empty() {
                     println!("    CVEs:  {}", app.cve_tags.join(", ").red());
@@ -193,7 +208,11 @@ impl Output {
                 image: app.effective_image(),
             });
         } else {
-            self.success(&format!("Installed {} ({})", app.name.bold(), app.effective_image()));
+            self.success(&format!(
+                "Installed {} ({})",
+                app.name.bold(),
+                app.effective_image()
+            ));
         }
     }
 

@@ -4,7 +4,11 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "vuln-pkg")]
-#[command(author, version, about = "A package manager for deliberately-vulnerable applications")]
+#[command(
+    author,
+    version,
+    about = "A package manager for deliberately-vulnerable applications"
+)]
 pub struct Cli {
     /// Output in JSON format for automation
     #[arg(long, global = true)]

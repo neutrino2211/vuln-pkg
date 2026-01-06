@@ -186,10 +186,7 @@ apps:
         assert_eq!(manifest.apps[0].name, "dvwa");
         assert_eq!(manifest.apps[0].ports, vec![80]);
         assert_eq!(manifest.apps[0].package_type, PackageType::Prebuilt);
-        assert_eq!(
-            manifest.apps[0].effective_image(),
-            "vulnerables/web-dvwa"
-        );
+        assert_eq!(manifest.apps[0].effective_image(), "vulnerables/web-dvwa");
     }
 
     #[test]
