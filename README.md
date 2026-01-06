@@ -11,6 +11,7 @@ vuln-pkg makes it easy to run intentionally vulnerable web applications locally 
 - Traefik reverse proxy for clean subdomain URLs (e.g., `http://dvwa.127.0.0.1.sslip.io`)
 - Simple CLI to list, install, run, stop, and remove vulnerable apps
 - Supports multiple apps running simultaneously
+- **Custom packages** - build your own vulnerable labs from Dockerfiles or Git repositories
 - JSON output for automation
 
 ## Requirements
@@ -109,6 +110,16 @@ vuln-pkg remove <app>
 vuln-pkg remove <app> --purge
 ```
 
+### rebuild
+
+Rebuild a custom application (dockerfile or git type). This is useful when you've updated the Dockerfile or want to pull the latest changes from a git repository.
+
+```bash
+vuln-pkg rebuild <app>
+```
+
+Note: This command only works with custom packages (`type: dockerfile` or `type: git`). For prebuilt packages, use `remove --purge` followed by `install` to get a fresh image.
+
 ### status
 
 Show the status of all managed applications.
@@ -170,7 +181,11 @@ Applications with multiple ports get additional subdomains:
 
 ## Manifest Format
 
-vuln-pkg reads application definitions from a YAML manifest:
+vuln-pkg reads application definitions from a YAML manifest. There are three package types:
+
+### Prebuilt Packages (Default)
+
+Pull and run existing Docker images from registries:
 
 ```yaml
 apps:
@@ -184,38 +199,99 @@ apps:
       - CVE-2021-12345
     env:
       - MYSQL_ROOT_PASSWORD=root
-
-  - name: juice-shop
-    version: "14.0"
-    image: bkimminich/juice-shop
-    ports:
-      - 3000
-    cve_tags:
-      - OWASP-Top-10
-    description: OWASP Juice Shop - Modern vulnerable web app
-
-  - name: webgoat
-    version: "8.2"
-    image: webgoat/webgoat
-    ports:
-      - 8080
-      - 9090
-    description: OWASP WebGoat - A deliberately insecure application
-
-signature: null  # Optional - unsigned manifests show a warning
 ```
 
-### Manifest Fields
+### Dockerfile Packages
+
+Build custom images from inline Dockerfiles or remote URLs:
+
+```yaml
+apps:
+  # Inline Dockerfile
+  - name: custom-sqli-lab
+    version: "1.0"
+    type: dockerfile
+    dockerfile: |
+      FROM php:8.0-apache
+      RUN docker-php-ext-install mysqli pdo pdo_mysql
+      COPY vuln-app/ /var/www/html/
+      RUN chmod 777 /var/www/html
+      EXPOSE 80
+    ports: [80]
+    cve_tags:
+      - SQL-Injection
+    description: Custom SQL injection lab
+
+  # Remote Dockerfile with build context
+  - name: remote-vuln-app
+    version: "1.0"
+    type: dockerfile
+    dockerfile_url: https://example.com/Dockerfile
+    context_url: https://example.com/context.tar.gz
+    ports: [8080]
+    description: Build from remote Dockerfile
+```
+
+### Git Packages
+
+Clone a repository and build from its Dockerfile:
+
+```yaml
+apps:
+  - name: git-vuln-lab
+    version: "1.0"
+    type: git
+    repo: https://github.com/user/vulnerable-app.git
+    ref: main                    # Branch, tag, or commit (optional)
+    dockerfile_path: ./Dockerfile  # Path to Dockerfile (optional, defaults to ./Dockerfile)
+    ports: [3000]
+    cve_tags:
+      - Custom
+    description: Build from git repository
+```
+
+### Manifest Fields Reference
+
+#### Common Fields (All Package Types)
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | Yes | Unique identifier for the app |
 | `version` | Yes | Version string |
-| `image` | Yes | Docker image to use |
+| `type` | No | Package type: `prebuilt` (default), `dockerfile`, or `git` |
 | `description` | No | Human-readable description |
 | `ports` | Yes | List of container ports to expose |
 | `cve_tags` | No | Related CVE identifiers |
 | `env` | No | Environment variables |
+
+#### Prebuilt Package Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `image` | Yes | Docker image to pull (e.g., `vulnerables/web-dvwa`) |
+
+#### Dockerfile Package Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `dockerfile` | * | Inline Dockerfile content |
+| `dockerfile_url` | * | URL to fetch Dockerfile from |
+| `context_url` | No | URL to fetch build context tarball (tar.gz) |
+
+\* Either `dockerfile` or `dockerfile_url` is required.
+
+#### Git Package Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `repo` | Yes | Git repository URL |
+| `ref` | No | Branch, tag, or commit to checkout (defaults to default branch) |
+| `dockerfile_path` | No | Path to Dockerfile in repo (defaults to `./Dockerfile`) |
+
+### Image Naming
+
+- **Prebuilt packages**: Uses the `image` field as-is
+- **Custom packages**: Images are tagged as `vuln-pkg/<name>:<version>`
 
 ## Examples
 
@@ -246,6 +322,56 @@ vuln-pkg --json list
 vuln-pkg --json status
 ```
 
+### Create a custom vulnerable lab
+
+Create a manifest with your own Dockerfile:
+
+```yaml
+# my-labs.yml
+apps:
+  - name: sqli-lab
+    version: "1.0"
+    type: dockerfile
+    dockerfile: |
+      FROM php:8.0-apache
+      RUN docker-php-ext-install mysqli
+      COPY <<EOF /var/www/html/index.php
+      <?php
+      \$conn = new mysqli("db", "root", "root", "vuln");
+      \$id = \$_GET['id'];
+      \$result = \$conn->query("SELECT * FROM users WHERE id = \$id");
+      ?>
+      EOF
+    ports: [80]
+    description: "Simple SQL injection lab"
+```
+
+```bash
+vuln-pkg --manifest-url file://./my-labs.yml run sqli-lab
+```
+
+### Use a git-based vulnerable app
+
+```yaml
+# git-labs.yml
+apps:
+  - name: dvwa-custom
+    version: "1.0"
+    type: git
+    repo: https://github.com/digininja/DVWA.git
+    ref: master
+    ports: [80]
+    description: "DVWA built from source"
+```
+
+```bash
+# Install and run
+vuln-pkg --manifest-url file://./git-labs.yml run dvwa-custom
+
+# Later, rebuild to get latest changes
+vuln-pkg --manifest-url file://./git-labs.yml rebuild dvwa-custom
+```
+
 ### Remote access (lab environment)
 
 If running vuln-pkg on a remote server accessible at `192.168.1.100`:
@@ -272,8 +398,15 @@ vuln-pkg stores state in `~/.vuln-pkg/`:
 ~/.vuln-pkg/
 ├── state.json      # Application state (running containers, network ID, etc.)
 ├── manifests/      # Cached manifests
+├── repos/          # Cloned git repositories (for git packages)
 └── images/         # Reserved for future use
 ```
+
+The `state.json` file tracks:
+- Installed applications and their status
+- Container IDs for running apps
+- Image source (prebuilt, dockerfile, or git)
+- Build timestamps and git commit SHAs for custom packages
 
 ## Environment Variables
 

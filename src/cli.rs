@@ -64,6 +64,12 @@ pub enum Commands {
         purge: bool,
     },
 
+    /// Rebuild a custom application (dockerfile or git type)
+    Rebuild {
+        /// Name of the application to rebuild
+        app: String,
+    },
+
     /// Show status of running applications
     Status,
 }

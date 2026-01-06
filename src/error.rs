@@ -24,6 +24,35 @@ pub enum VulnPkgError {
     #[error("Application '{0}' is not running")]
     AppNotRunning(String),
 
+    #[error("Application '{0}' is a prebuilt package and cannot be rebuilt")]
+    AppNotRebuildable(String),
+
+    #[error("Manifest validation error: {0}")]
+    ManifestValidation(String),
+
+    #[error("Failed to fetch Dockerfile from {url}: {source}")]
+    DockerfileFetch {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+
+    #[error("Failed to fetch build context from {url}: {source}")]
+    ContextFetch {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+
+    #[error("Failed to build image '{image}': {message}")]
+    ImageBuild { image: String, message: String },
+
+    #[error("Failed to clone repository '{repo}': {message}")]
+    GitClone { repo: String, message: String },
+
+    #[error("Failed to checkout ref '{ref_name}': {message}")]
+    GitCheckout { ref_name: String, message: String },
+
     #[error("Docker error: {0}")]
     Docker(#[from] bollard::errors::Error),
 

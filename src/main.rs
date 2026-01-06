@@ -12,9 +12,9 @@ use clap::Parser;
 use cli::{Cli, Commands};
 use docker::DockerManager;
 use error::{Result, VulnPkgError};
-use manifest::Manifest;
+use manifest::{Manifest, PackageType};
 use output::Output;
-use state::StateManager;
+use state::{ImageSource, StateManager};
 
 /// Generate a sslip.io domain from an IP address for zero-config DNS resolution
 /// e.g., 127.0.0.1 -> "127.0.0.1.sslip.io"
@@ -59,6 +59,9 @@ async fn run(cli: Cli, output: &Output) -> Result<()> {
         Commands::Remove { app, purge } => {
             cmd_remove(&app, &state_mgr, output, purge).await
         }
+        Commands::Rebuild { app } => {
+            cmd_rebuild(&app, &cli.manifest_url, &state_mgr, output).await
+        }
         Commands::Status => cmd_status(&state_mgr, output).await,
     }
 }
@@ -102,18 +105,70 @@ async fn cmd_install(
         .ok_or_else(|| VulnPkgError::AppNotFound(app_name.to_string()))?;
 
     let docker = DockerManager::new()?;
+    let effective_image = app.effective_image();
 
-    // Check if image already exists
-    if !docker.image_exists(&app.image).await? {
-        docker.pull_image(&app.image, output).await?;
-    } else {
-        output.info(&format!("Image {} already exists", app.image));
-    }
+    // Handle different package types
+    let (image_source, git_commit) = match app.package_type {
+        PackageType::Prebuilt => {
+            // Pull image if needed
+            if !docker.image_exists(&effective_image).await? {
+                docker.pull_image(&effective_image, output).await?;
+            } else {
+                output.info(&format!("Image {} already exists", effective_image));
+            }
+            (ImageSource::Prebuilt, None)
+        }
+        PackageType::Dockerfile => {
+            // Build from Dockerfile
+            if let Some(ref dockerfile) = app.dockerfile {
+                // Inline Dockerfile
+                docker
+                    .build_from_dockerfile(dockerfile, &effective_image, output)
+                    .await?;
+            } else if let Some(ref url) = app.dockerfile_url {
+                // Remote Dockerfile
+                docker
+                    .build_from_dockerfile_url(
+                        url,
+                        app.context_url.as_deref(),
+                        &effective_image,
+                        output,
+                    )
+                    .await?;
+            }
+            (ImageSource::Dockerfile, None)
+        }
+        PackageType::Git => {
+            // Build from git repository
+            let repo = app
+                .repo
+                .as_ref()
+                .ok_or_else(|| VulnPkgError::ManifestValidation(
+                    format!("Git app '{}' missing repo field", app_name)
+                ))?;
 
-    // Update state
+            let commit = docker
+                .build_from_git(
+                    repo,
+                    app.git_ref.as_deref(),
+                    app.dockerfile_path.as_deref(),
+                    &effective_image,
+                    state_mgr,
+                    output,
+                )
+                .await?;
+            (ImageSource::Git, commit)
+        }
+    };
+
+    // Update state with build metadata
     let mut state = state_mgr.load_state()?;
     let app_state = state.apps.entry(app.name.clone()).or_default();
     app_state.installed = true;
+    app_state.image_source = image_source;
+    app_state.image_tag = Some(effective_image);
+    app_state.git_commit = git_commit;
+    app_state.built_at = Some(chrono::Utc::now().to_rfc3339());
     state_mgr.save_state(&state)?;
 
     output.app_installed(app);
@@ -149,10 +204,14 @@ async fn cmd_run(
     }
 
     let docker = DockerManager::new()?;
+    let effective_image = app.effective_image();
 
-    // Ensure image is pulled
-    if !docker.image_exists(&app.image).await? {
-        docker.pull_image(&app.image, output).await?;
+    // Ensure image exists (install if needed)
+    if !docker.image_exists(&effective_image).await? {
+        // Delegate to install logic for building/pulling
+        cmd_install(app_name, manifest_url, state_mgr, output).await?;
+        // Reload state after install
+        state = state_mgr.load_state()?;
     }
 
     // Ensure network exists
@@ -273,6 +332,80 @@ async fn cmd_remove(
     state_mgr.save_state(&state)?;
 
     output.app_removed(app_name);
+    Ok(())
+}
+
+async fn cmd_rebuild(
+    app_name: &str,
+    manifest_url: &str,
+    state_mgr: &StateManager,
+    output: &Output,
+) -> Result<()> {
+    let manifest = fetch_manifest(manifest_url, state_mgr, output).await?;
+
+    let app = manifest
+        .find_app(app_name)
+        .ok_or_else(|| VulnPkgError::AppNotFound(app_name.to_string()))?;
+
+    // Only custom packages can be rebuilt
+    if app.package_type == PackageType::Prebuilt {
+        return Err(VulnPkgError::AppNotRebuildable(app_name.to_string()));
+    }
+
+    let docker = DockerManager::new()?;
+    let effective_image = app.effective_image();
+
+    output.info(&format!("Rebuilding {}", app_name));
+
+    // Perform the build based on package type
+    let git_commit = match app.package_type {
+        PackageType::Prebuilt => unreachable!(),
+        PackageType::Dockerfile => {
+            if let Some(ref dockerfile) = app.dockerfile {
+                docker
+                    .build_from_dockerfile(dockerfile, &effective_image, output)
+                    .await?;
+            } else if let Some(ref url) = app.dockerfile_url {
+                docker
+                    .build_from_dockerfile_url(
+                        url,
+                        app.context_url.as_deref(),
+                        &effective_image,
+                        output,
+                    )
+                    .await?;
+            }
+            None
+        }
+        PackageType::Git => {
+            let repo = app.repo.as_ref().ok_or_else(|| {
+                VulnPkgError::ManifestValidation(format!(
+                    "Git app '{}' missing repo field",
+                    app_name
+                ))
+            })?;
+
+            docker
+                .build_from_git(
+                    repo,
+                    app.git_ref.as_deref(),
+                    app.dockerfile_path.as_deref(),
+                    &effective_image,
+                    state_mgr,
+                    output,
+                )
+                .await?
+        }
+    };
+
+    // Update state with new build timestamp
+    let mut state = state_mgr.load_state()?;
+    let app_state = state.apps.entry(app.name.clone()).or_default();
+    app_state.git_commit = git_commit;
+    app_state.built_at = Some(chrono::Utc::now().to_rfc3339());
+    state_mgr.save_state(&state)?;
+
+    output.success(&format!("Rebuilt {}", app_name));
     Ok(())
 }
 

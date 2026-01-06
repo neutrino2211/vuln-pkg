@@ -39,29 +39,33 @@ cargo clippy
 
 ### Source Modules (`src/`)
 
-- **main.rs** - Entry point and command handlers (`cmd_list`, `cmd_install`, `cmd_run`, `cmd_remove`, `cmd_dns`, `cmd_status`)
+- **main.rs** - Entry point and command handlers (`cmd_list`, `cmd_install`, `cmd_run`, `cmd_remove`, `cmd_rebuild`, `cmd_status`)
 - **cli.rs** - Clap CLI definitions with `Commands` enum
-- **manifest.rs** - YAML manifest fetching and parsing with `Manifest` and `App` structs
-- **state.rs** - Local state management (`StateManager`, `State`, `AppState`) for `~/.vuln-pkg/`
-- **docker.rs** - Docker operations via bollard (`DockerManager`)
-- **dns.rs** - Tokio-based UDP+TCP DNS server for `*.lab.local`
+- **manifest.rs** - YAML manifest fetching and parsing with `Manifest`, `App`, and `PackageType` enum
+- **state.rs** - Local state management (`StateManager`, `State`, `AppState`, `ImageSource`) for `~/.vuln-pkg/`
+- **docker.rs** - Docker operations via bollard (`DockerManager`) including image building
 - **output.rs** - Colored console output and JSON formatting (`Output`)
 - **error.rs** - Error types with thiserror (`VulnPkgError`)
 
 ### CLI Commands
 - `vuln-pkg list` - Display available vulnerable apps from manifest
-- `vuln-pkg install <app>` - Pull Docker image and create local config
-- `vuln-pkg run <app> [--no-dns]` - Start container with port mapping, optionally start DNS server
+- `vuln-pkg install <app>` - Pull/build Docker image and create local config
+- `vuln-pkg run <app>` - Start container with Traefik routing
 - `vuln-pkg stop <app>` - Stop a running container (keeps container for restart)
 - `vuln-pkg remove <app> [--purge]` - Stop and remove container
-- `vuln-pkg dns [--port N]` - Run standalone DNS server
+- `vuln-pkg rebuild <app>` - Rebuild custom package (dockerfile/git types only)
 - `vuln-pkg status` - Show status of managed applications
+
+### Package Types
+- **prebuilt** (default) - Pull existing Docker images from registries
+- **dockerfile** - Build from inline or remote Dockerfile
+- **git** - Clone repository and build from Dockerfile
 
 ### Local State (`~/.vuln-pkg/`)
 - `manifests/` - Cached YAML manifest files
+- `repos/` - Cloned git repositories for git-based packages
 - `images/` - Optional Docker image tarball cache
-- `state.json` - Application state (installed apps, containers, port mappings)
-- `dns.db` - dnsmasq-style hosts file for DNS entries
+- `state.json` - Application state (installed apps, containers, image source, build metadata)
 
 ### Networking
 - Embedded DNS server binds to port 53 (requires `sudo` or `setcap`)
@@ -74,14 +78,20 @@ cargo clippy
 - `clap` - CLI argument parsing with derive
 - `serde` + `serde_yaml` - YAML manifest parsing
 - `reqwest` - HTTP client with rustls
-- `bollard` - Docker API client
-- `trust-dns-proto` - DNS protocol implementation
+- `bollard` - Docker API client (pull and build images)
+- `git2` - Git operations for cloning repositories
+- `tar` + `flate2` - Tarball creation for Docker build context
+- `chrono` - Timestamps for build metadata
 - `colored` - Terminal colors
 - `tracing` / `tracing-subscriber` - Logging
 
 ## Testing
 
 Tests are co-located in each module using `#[cfg(test)]`:
-- `manifest::tests::test_parse_manifest` - YAML parsing
+- `manifest::tests::test_parse_prebuilt_manifest` - Prebuilt YAML parsing
+- `manifest::tests::test_parse_dockerfile_inline_manifest` - Inline Dockerfile parsing
+- `manifest::tests::test_parse_dockerfile_url_manifest` - Remote Dockerfile parsing
+- `manifest::tests::test_parse_git_manifest` - Git package parsing
+- `manifest::tests::test_backward_compatibility` - Manifests without type field
+- `manifest::tests::test_validation_*` - Validation error tests
 - `state::tests::test_url_to_filename` - URL sanitization
-- `dns::tests::test_dns_entry_management` - DNS entry storage

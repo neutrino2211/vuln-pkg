@@ -1,18 +1,24 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
     StartContainerOptions, StopContainerOptions,
 };
-use bollard::image::CreateImageOptions;
+use bollard::image::{BuildImageOptions, CreateImageOptions};
 use bollard::models::{EndpointSettings, HostConfig, Mount, MountTypeEnum, PortBinding};
 use bollard::network::{CreateNetworkOptions, ListNetworksOptions};
 use bollard::Docker;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use futures::StreamExt;
+use git2::Repository;
+use tar::Builder;
 
 use crate::error::{Result, VulnPkgError};
 use crate::manifest::App;
 use crate::output::Output;
+use crate::state::StateManager;
 
 const CONTAINER_LABEL: &str = "vuln-pkg";
 const NETWORK_NAME: &str = "vuln-pkg";
@@ -262,6 +268,309 @@ impl DockerManager {
         Ok(())
     }
 
+    // ==================== Image Building ====================
+
+    /// Build an image from inline Dockerfile content
+    pub async fn build_from_dockerfile(
+        &self,
+        dockerfile_content: &str,
+        image_tag: &str,
+        output: &Output,
+    ) -> Result<()> {
+        output.info(&format!("Building image: {}", image_tag));
+
+        let tar_bytes = Self::create_dockerfile_tarball(dockerfile_content)?;
+        self.build_image_from_tarball(&tar_bytes, image_tag, "Dockerfile", output)
+            .await
+    }
+
+    /// Build an image from a remote Dockerfile URL with optional context
+    pub async fn build_from_dockerfile_url(
+        &self,
+        dockerfile_url: &str,
+        context_url: Option<&str>,
+        image_tag: &str,
+        output: &Output,
+    ) -> Result<()> {
+        output.info(&format!("Fetching Dockerfile from: {}", dockerfile_url));
+
+        // Fetch the Dockerfile
+        let dockerfile_content = reqwest::get(dockerfile_url)
+            .await
+            .map_err(|e| VulnPkgError::DockerfileFetch {
+                url: dockerfile_url.to_string(),
+                source: e,
+            })?
+            .text()
+            .await
+            .map_err(|e| VulnPkgError::DockerfileFetch {
+                url: dockerfile_url.to_string(),
+                source: e,
+            })?;
+
+        let tar_bytes = if let Some(ctx_url) = context_url {
+            output.info(&format!("Fetching build context from: {}", ctx_url));
+            Self::fetch_and_merge_context(&dockerfile_content, ctx_url).await?
+        } else {
+            Self::create_dockerfile_tarball(&dockerfile_content)?
+        };
+
+        output.info(&format!("Building image: {}", image_tag));
+        self.build_image_from_tarball(&tar_bytes, image_tag, "Dockerfile", output)
+            .await
+    }
+
+    /// Build an image from a cloned Git repository
+    pub async fn build_from_git(
+        &self,
+        repo_url: &str,
+        git_ref: Option<&str>,
+        dockerfile_path: Option<&str>,
+        image_tag: &str,
+        state_mgr: &StateManager,
+        output: &Output,
+    ) -> Result<Option<String>> {
+        output.info(&format!("Cloning repository: {}", repo_url));
+
+        // Clone to a directory under ~/.vuln-pkg/repos/
+        let repo_name = Self::sanitize_repo_name(repo_url);
+        let clone_dir = state_mgr.repos_dir().join(&repo_name);
+
+        // Clone or open existing repository
+        let repo = Self::clone_or_open_repo(repo_url, &clone_dir)?;
+
+        // Checkout the specified ref if provided
+        if let Some(ref_name) = git_ref {
+            output.info(&format!("Checking out: {}", ref_name));
+            Self::checkout_ref(&repo, ref_name)?;
+        }
+
+        // Get current commit SHA
+        let commit_sha = repo
+            .head()
+            .ok()
+            .and_then(|h| h.target())
+            .map(|oid| oid.to_string());
+
+        let dockerfile_path = dockerfile_path.unwrap_or("Dockerfile");
+        output.info(&format!("Building from {}", dockerfile_path));
+
+        // Create tarball from the repo directory
+        let tar_bytes = Self::create_context_tarball(&clone_dir, dockerfile_path)?;
+
+        output.info(&format!("Building image: {}", image_tag));
+        self.build_image_from_tarball(&tar_bytes, image_tag, dockerfile_path, output)
+            .await?;
+
+        Ok(commit_sha)
+    }
+
+    /// Core build method using bollard
+    async fn build_image_from_tarball(
+        &self,
+        tar_bytes: &[u8],
+        image_tag: &str,
+        dockerfile_path: &str,
+        output: &Output,
+    ) -> Result<()> {
+        let options = BuildImageOptions {
+            dockerfile: dockerfile_path,
+            t: image_tag,
+            rm: true,
+            forcerm: true,
+            ..Default::default()
+        };
+
+        let mut stream = self
+            .docker
+            .build_image(options, None, Some(tar_bytes.to_vec().into()));
+
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(info) => {
+                    if let Some(stream_text) = info.stream {
+                        let text = stream_text.trim();
+                        if !text.is_empty() {
+                            output.debug(text);
+                        }
+                    }
+                    if let Some(error) = info.error {
+                        return Err(VulnPkgError::ImageBuild {
+                            image: image_tag.to_string(),
+                            message: error,
+                        });
+                    }
+                }
+                Err(e) => return Err(VulnPkgError::Docker(e)),
+            }
+        }
+
+        output.success(&format!("Image built: {}", image_tag));
+        Ok(())
+    }
+
+    // ==================== Build Helpers ====================
+
+    /// Create a tarball containing just a Dockerfile
+    fn create_dockerfile_tarball(dockerfile_content: &str) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        {
+            let encoder = GzEncoder::new(&mut buf, Compression::default());
+            let mut tar = Builder::new(encoder);
+
+            let dockerfile_bytes = dockerfile_content.as_bytes();
+            let mut header = tar::Header::new_gnu();
+            header.set_size(dockerfile_bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append_data(&mut header, "Dockerfile", dockerfile_bytes)?;
+
+            tar.finish()?;
+        }
+        Ok(buf)
+    }
+
+    /// Create a tarball from a directory (for Git repos)
+    fn create_context_tarball(dir: &Path, _dockerfile_path: &str) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        {
+            let encoder = GzEncoder::new(&mut buf, Compression::default());
+            let mut tar = Builder::new(encoder);
+
+            // Recursively add all files from the directory
+            tar.append_dir_all(".", dir)?;
+            tar.finish()?;
+        }
+        Ok(buf)
+    }
+
+    /// Fetch remote context tarball and merge with Dockerfile
+    async fn fetch_and_merge_context(
+        dockerfile_content: &str,
+        context_url: &str,
+    ) -> Result<Vec<u8>> {
+        let response = reqwest::get(context_url)
+            .await
+            .map_err(|e| VulnPkgError::ContextFetch {
+                url: context_url.to_string(),
+                source: e,
+            })?;
+
+        let context_bytes = response
+            .bytes()
+            .await
+            .map_err(|e| VulnPkgError::ContextFetch {
+                url: context_url.to_string(),
+                source: e,
+            })?;
+
+        // For now, we'll extract the context and add/replace the Dockerfile
+        // This is a simplified implementation that assumes the context is a tar.gz
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+
+        let decoder = GzDecoder::new(&context_bytes[..]);
+        let mut archive = tar::Archive::new(decoder);
+
+        // Create a new tarball with the context + our Dockerfile
+        let mut buf = Vec::new();
+        {
+            let encoder = GzEncoder::new(&mut buf, Compression::default());
+            let mut new_tar = Builder::new(encoder);
+
+            // Add all files from the original context except Dockerfile
+            for entry in archive.entries()? {
+                let mut entry = entry?;
+                let path = entry.path()?.into_owned();
+                if path.to_string_lossy() != "Dockerfile" {
+                    let mut header = entry.header().clone();
+                    let mut data = Vec::new();
+                    entry.read_to_end(&mut data)?;
+                    new_tar.append_data(&mut header, &path, &data[..])?;
+                }
+            }
+
+            // Add our Dockerfile
+            let dockerfile_bytes = dockerfile_content.as_bytes();
+            let mut header = tar::Header::new_gnu();
+            header.set_size(dockerfile_bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            new_tar.append_data(&mut header, "Dockerfile", dockerfile_bytes)?;
+
+            new_tar.finish()?;
+        }
+
+        Ok(buf)
+    }
+
+    // ==================== Git Helpers ====================
+
+    fn clone_or_open_repo(repo_url: &str, clone_dir: &Path) -> Result<Repository> {
+        if clone_dir.exists() {
+            // Open existing and fetch updates
+            let repo = Repository::open(clone_dir).map_err(|e| VulnPkgError::GitClone {
+                repo: repo_url.to_string(),
+                message: e.to_string(),
+            })?;
+
+            // Fetch latest from origin (scope to drop remote before returning repo)
+            {
+                let mut remote = repo
+                    .find_remote("origin")
+                    .map_err(|e| VulnPkgError::GitClone {
+                        repo: repo_url.to_string(),
+                        message: e.to_string(),
+                    })?;
+
+                remote
+                    .fetch(&["refs/heads/*:refs/remotes/origin/*"], None, None)
+                    .map_err(|e| VulnPkgError::GitClone {
+                        repo: repo_url.to_string(),
+                        message: format!("Failed to fetch: {}", e),
+                    })?;
+            }
+
+            Ok(repo)
+        } else {
+            // Fresh clone
+            Repository::clone(repo_url, clone_dir).map_err(|e| VulnPkgError::GitClone {
+                repo: repo_url.to_string(),
+                message: e.to_string(),
+            })
+        }
+    }
+
+    fn checkout_ref(repo: &Repository, ref_name: &str) -> Result<()> {
+        // Try to find the ref (could be branch, tag, or commit)
+        let object = repo
+            .revparse_single(ref_name)
+            .or_else(|_| repo.revparse_single(&format!("origin/{}", ref_name)))
+            .map_err(|e| VulnPkgError::GitCheckout {
+                ref_name: ref_name.to_string(),
+                message: e.to_string(),
+            })?;
+
+        repo.checkout_tree(&object, None)
+            .map_err(|e| VulnPkgError::GitCheckout {
+                ref_name: ref_name.to_string(),
+                message: e.to_string(),
+            })?;
+
+        // Set HEAD to point to the commit
+        repo.set_head_detached(object.id())
+            .map_err(|e| VulnPkgError::GitCheckout {
+                ref_name: ref_name.to_string(),
+                message: e.to_string(),
+            })?;
+
+        Ok(())
+    }
+
+    fn sanitize_repo_name(url: &str) -> String {
+        url.replace(['/', ':', '@', '.'], "_")
+    }
+
     // ==================== Container Management ====================
 
     pub async fn create_container(
@@ -347,7 +656,7 @@ impl DockerManager {
         };
 
         let config = Config {
-            image: Some(app.image.clone()),
+            image: Some(app.effective_image()),
             host_config: Some(host_config),
             labels: Some(labels),
             env: if app.env.is_empty() {

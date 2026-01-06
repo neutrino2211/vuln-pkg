@@ -56,13 +56,13 @@ impl Output {
     pub fn list_apps(&self, apps: &[App], states: &std::collections::HashMap<String, AppState>) {
         if self.json {
             #[derive(Serialize)]
-            struct AppInfo<'a> {
-                name: &'a str,
-                version: &'a str,
-                image: &'a str,
-                description: &'a str,
-                cve_tags: &'a [String],
-                ports: &'a [u16],
+            struct AppInfo {
+                name: String,
+                version: String,
+                image: String,
+                description: String,
+                cve_tags: Vec<String>,
+                ports: Vec<u16>,
                 installed: bool,
                 running: bool,
             }
@@ -72,12 +72,12 @@ impl Output {
                 .map(|app| {
                     let state = states.get(&app.name);
                     AppInfo {
-                        name: &app.name,
-                        version: &app.version,
-                        image: &app.image,
-                        description: &app.description,
-                        cve_tags: &app.cve_tags,
-                        ports: &app.ports,
+                        name: app.name.clone(),
+                        version: app.version.clone(),
+                        image: app.effective_image(),
+                        description: app.description.clone(),
+                        cve_tags: app.cve_tags.clone(),
+                        ports: app.ports.clone(),
                         installed: state.map(|s| s.installed).unwrap_or(false),
                         running: state.map(|s| s.running).unwrap_or(false),
                     }
@@ -103,7 +103,7 @@ impl Output {
                     println!("    {}", app.description);
                 }
 
-                println!("    Image: {}", app.image.cyan());
+                println!("    Image: {}", app.effective_image().cyan());
                 println!("    Ports: {}", app.ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", "));
 
                 if !app.cve_tags.is_empty() {
@@ -182,18 +182,18 @@ impl Output {
     pub fn app_installed(&self, app: &App) {
         if self.json {
             #[derive(Serialize)]
-            struct InstallResult<'a> {
+            struct InstallResult {
                 status: &'static str,
-                app: &'a str,
-                image: &'a str,
+                app: String,
+                image: String,
             }
             self.json(&InstallResult {
                 status: "installed",
-                app: &app.name,
-                image: &app.image,
+                app: app.name.clone(),
+                image: app.effective_image(),
             });
         } else {
-            self.success(&format!("Installed {} ({})", app.name.bold(), app.image));
+            self.success(&format!("Installed {} ({})", app.name.bold(), app.effective_image()));
         }
     }
 

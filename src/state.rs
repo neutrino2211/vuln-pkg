@@ -7,7 +7,21 @@ use crate::error::{Result, VulnPkgError};
 const STATE_DIR: &str = ".vuln-pkg";
 const MANIFESTS_DIR: &str = "manifests";
 const IMAGES_DIR: &str = "images";
+const REPOS_DIR: &str = "repos";
 const STATE_FILE: &str = "state.json";
+
+/// Tracks how the Docker image was obtained
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageSource {
+    /// Pulled from a registry
+    #[default]
+    Prebuilt,
+    /// Built from a Dockerfile
+    Dockerfile,
+    /// Built from a git repository
+    Git,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppState {
@@ -15,6 +29,22 @@ pub struct AppState {
     pub running: bool,
     pub container_id: Option<String>,
     pub hostnames: Vec<String>,
+
+    /// How the image was obtained
+    #[serde(default)]
+    pub image_source: ImageSource,
+
+    /// The Docker image tag used
+    #[serde(default)]
+    pub image_tag: Option<String>,
+
+    /// Git commit SHA (for git-based builds)
+    #[serde(default)]
+    pub git_commit: Option<String>,
+
+    /// Timestamp of last build (ISO 8601 format)
+    #[serde(default)]
+    pub built_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -50,6 +80,7 @@ impl StateManager {
     pub fn init(&self) -> Result<()> {
         std::fs::create_dir_all(self.manifests_dir())?;
         std::fs::create_dir_all(self.images_dir())?;
+        std::fs::create_dir_all(self.repos_dir())?;
 
         // Create state file if it doesn't exist
         if !self.state_file().exists() {
@@ -69,6 +100,10 @@ impl StateManager {
 
     pub fn images_dir(&self) -> PathBuf {
         self.base_dir.join(IMAGES_DIR)
+    }
+
+    pub fn repos_dir(&self) -> PathBuf {
+        self.base_dir.join(REPOS_DIR)
     }
 
     pub fn state_file(&self) -> PathBuf {
