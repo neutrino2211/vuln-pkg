@@ -1,5 +1,7 @@
 # vuln-pkg
 
+> **Work in Progress** - This project is under active development. APIs and features may change.
+
 **The NPM for your home lab.**
 
 One command to spin up any vulnerable application for security training. No configuration, no port conflicts, no hassle.

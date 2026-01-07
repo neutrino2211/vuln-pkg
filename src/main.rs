@@ -362,19 +362,61 @@ async fn cmd_run(
         .ok_or_else(|| VulnPkgError::AppNotFound(app_name.to_string()))?;
 
     let mut state = state_mgr.load_state()?;
+    let docker = DockerManager::new()?;
 
-    // Check if already running
-    if let Some(app_state) = state.apps.get(&app.name)
-        && app_state.running
-        && let Some(ref container_id) = app_state.container_id
-    {
-        let docker = DockerManager::new()?;
-        if docker.container_running(container_id).await? {
+    // Check if container already exists
+    if let Some((container_id, is_running)) = docker.find_app_container(app_name).await? {
+        if is_running {
             return Err(VulnPkgError::AppAlreadyRunning(app_name.to_string()));
         }
+
+        // Container exists but is stopped - ensure Traefik is running first
+        output.info("Ensuring vuln-pkg network exists");
+        let network_id = docker.ensure_network().await?;
+        state.network_id = Some(network_id.clone());
+
+        if docker.is_traefik_running().await?.is_none() {
+            output.info("Starting Traefik reverse proxy");
+            let traefik_id = docker
+                .start_traefik(&network_id, domain, https, output)
+                .await?;
+            state.traefik_container_id = Some(traefik_id);
+            output.success(&format!(
+                "Traefik running (dashboard: http://traefik.{})",
+                domain
+            ));
+        }
+
+        // Start existing container
+        output.info(&format!("Starting existing container for {}", app.name));
+        docker.start_container(&container_id).await?;
+
+        // Update state - restore hostnames from previous state or regenerate
+        let app_state = state.apps.entry(app.name.clone()).or_default();
+        app_state.running = true;
+        app_state.container_id = Some(container_id);
+
+        // Regenerate hostnames based on app ports
+        let hostnames: Vec<String> = app
+            .ports
+            .iter()
+            .enumerate()
+            .map(|(i, port)| {
+                if i == 0 {
+                    format!("{}.{}", app.name, domain)
+                } else {
+                    format!("{}-{}.{}", app.name, port, domain)
+                }
+            })
+            .collect();
+        app_state.hostnames = hostnames.clone();
+        state_mgr.save_state(&state)?;
+
+        output.app_running(app, &hostnames, domain, https);
+        return Ok(());
     }
 
-    let docker = DockerManager::new()?;
+    // Container doesn't exist - need to create it
     let effective_image = app.effective_image();
 
     // Ensure image exists (install if needed)

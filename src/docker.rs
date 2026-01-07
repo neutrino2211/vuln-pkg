@@ -761,4 +761,35 @@ impl DockerManager {
             .filter(|(_, _, running)| *running)
             .count())
     }
+
+    /// Check if a container exists for the given app name
+    /// Returns (container_id, is_running) if found, None if not found
+    pub async fn find_app_container(&self, app_name: &str) -> Result<Option<(String, bool)>> {
+        let container_name = format!("vuln-pkg-{}", app_name);
+
+        let mut filters = HashMap::new();
+        filters.insert("name", vec![container_name.as_str()]);
+
+        let options = ListContainersOptions {
+            all: true,
+            filters,
+            ..Default::default()
+        };
+
+        let containers = self.docker.list_containers(Some(options)).await?;
+
+        for container in containers {
+            if let Some(names) = &container.names {
+                // Container names have a leading slash
+                if names.iter().any(|n| n == &format!("/{}", container_name)) {
+                    let running = container.state.as_deref() == Some("running");
+                    if let Some(id) = container.id {
+                        return Ok(Some((id, running)));
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    }
 }
