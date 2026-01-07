@@ -15,7 +15,11 @@ pub struct Cli {
     pub json: bool,
 
     /// Manifest URL to fetch apps from
-    #[arg(long, global = true, default_value = "https://raw.githubusercontent.com/neutrno2211/vuln-pkg/main/manifest.yml")]
+    #[arg(
+        long,
+        global = true,
+        default_value = "https://raw.githubusercontent.com/neutrno2211/vuln-pkg/main/manifest.yml"
+    )]
     pub manifest_url: String,
 
     /// Address that hostnames resolve to (useful if /etc/hosts uses different IP)
