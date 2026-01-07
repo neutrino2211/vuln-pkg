@@ -105,6 +105,7 @@ main() {
 
     # Determine binary name
     ASSET_NAME="${BINARY_NAME}-${OS}-${ARCH}"
+    info "Fetching asset name: ${ASSET_NAME}"
 
     # Get version
     if [ -n "$VULN_PKG_VERSION" ]; then
