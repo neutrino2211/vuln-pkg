@@ -14,11 +14,15 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
+    /// Auto-accept new manifests without prompting (for scripting)
+    #[arg(short = 'y', long, global = true)]
+    pub yes: bool,
+
     /// Manifest URL to fetch apps from
     #[arg(
         long,
         global = true,
-        default_value = "https://raw.githubusercontent.com/neutrno2211/vuln-pkg/main/manifest.yml"
+        default_value = "https://raw.githubusercontent.com/neutrino2211/vuln-pkg/refs/heads/main/manifest.yml"
     )]
     pub manifest_url: String,
 
@@ -43,6 +47,12 @@ pub struct Cli {
 pub enum Commands {
     /// List available vulnerable applications
     List,
+
+    /// Search for applications by name, description, or tags
+    Search {
+        /// Search query (matches against name, description, and tags)
+        query: String,
+    },
 
     /// Install a vulnerable application (pull image, create config)
     Install {
@@ -80,4 +90,25 @@ pub enum Commands {
 
     /// Show status of running applications
     Status,
+
+    /// Manage manifests (show info, forget accepted manifests)
+    Manifest {
+        #[command(subcommand)]
+        command: ManifestCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ManifestCommands {
+    /// Show manifest information and contents
+    Show,
+
+    /// Forget (un-accept) a previously accepted manifest
+    Forget {
+        /// URL of the manifest to forget (uses --manifest-url if not specified)
+        url: Option<String>,
+    },
+
+    /// List all accepted manifests
+    Accepted,
 }

@@ -9,6 +9,32 @@ const MANIFESTS_DIR: &str = "manifests";
 const IMAGES_DIR: &str = "images";
 const REPOS_DIR: &str = "repos";
 const STATE_FILE: &str = "state.json";
+const ACCEPTED_MANIFESTS_FILE: &str = "accepted-manifests.json";
+
+/// Information about an accepted manifest
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcceptedManifest {
+    /// When the manifest was accepted (ISO 8601)
+    pub accepted_at: String,
+    /// Author name from manifest metadata
+    #[serde(default)]
+    pub author: Option<String>,
+    /// Email from manifest metadata
+    #[serde(default)]
+    pub email: Option<String>,
+    /// URL from manifest metadata
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Description from manifest metadata
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Tracks accepted manifests by URL
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AcceptedManifests {
+    pub manifests: HashMap<String, AcceptedManifest>,
+}
 
 /// Tracks how the Docker image was obtained
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -139,6 +165,62 @@ impl StateManager {
         let filename = url_to_filename(url);
         let path = self.manifests_dir().join(filename);
         if path.exists() { Some(path) } else { None }
+    }
+
+    fn accepted_manifests_file(&self) -> PathBuf {
+        self.base_dir.join(ACCEPTED_MANIFESTS_FILE)
+    }
+
+    pub fn load_accepted_manifests(&self) -> Result<AcceptedManifests> {
+        if !self.accepted_manifests_file().exists() {
+            return Ok(AcceptedManifests::default());
+        }
+        let content = std::fs::read_to_string(self.accepted_manifests_file())?;
+        let accepted: AcceptedManifests = serde_json::from_str(&content).map_err(|e| {
+            VulnPkgError::State(format!("Failed to parse accepted manifests: {}", e))
+        })?;
+        Ok(accepted)
+    }
+
+    pub fn save_accepted_manifests(&self, accepted: &AcceptedManifests) -> Result<()> {
+        let content = serde_json::to_string_pretty(accepted).map_err(|e| {
+            VulnPkgError::State(format!("Failed to serialize accepted manifests: {}", e))
+        })?;
+        std::fs::write(self.accepted_manifests_file(), content)?;
+        Ok(())
+    }
+
+    pub fn is_manifest_accepted(&self, url: &str) -> Result<bool> {
+        let accepted = self.load_accepted_manifests()?;
+        Ok(accepted.manifests.contains_key(url))
+    }
+
+    pub fn accept_manifest(
+        &self,
+        url: &str,
+        manifest_meta: &crate::manifest::ManifestMeta,
+    ) -> Result<()> {
+        let mut accepted = self.load_accepted_manifests()?;
+        accepted.manifests.insert(
+            url.to_string(),
+            AcceptedManifest {
+                accepted_at: chrono::Utc::now().to_rfc3339(),
+                author: manifest_meta.author.clone(),
+                email: manifest_meta.email.clone(),
+                url: manifest_meta.url.clone(),
+                description: manifest_meta.description.clone(),
+            },
+        );
+        self.save_accepted_manifests(&accepted)
+    }
+
+    pub fn forget_manifest(&self, url: &str) -> Result<bool> {
+        let mut accepted = self.load_accepted_manifests()?;
+        let removed = accepted.manifests.remove(url).is_some();
+        if removed {
+            self.save_accepted_manifests(&accepted)?;
+        }
+        Ok(removed)
     }
 }
 

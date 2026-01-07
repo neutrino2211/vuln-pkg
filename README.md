@@ -92,6 +92,22 @@ vuln-pkg list
 vuln-pkg --json list
 ```
 
+### search
+
+Search for applications by name, description, or tags.
+
+```bash
+vuln-pkg search sqli
+vuln-pkg search owasp
+vuln-pkg search CVE-2021
+vuln-pkg --json search api
+```
+
+The search is case-insensitive and matches against:
+- Application name
+- Description text
+- Tags (CVEs, vulnerability types, etc.)
+
 ### install
 
 Pull the Docker image for an application without starting it.
@@ -164,12 +180,29 @@ vuln-pkg status
 vuln-pkg --json status
 ```
 
+### manifest
+
+Manage manifests - view information, list accepted manifests, or forget previously accepted ones.
+
+```bash
+# Show manifest information and contents
+vuln-pkg manifest show
+
+# List all accepted manifests
+vuln-pkg manifest accepted
+
+# Forget (un-accept) a manifest
+vuln-pkg manifest forget
+vuln-pkg manifest forget https://example.com/custom-manifest.yml
+```
+
 ## Global Options
 
 | Option | Description |
 |--------|-------------|
 | `--json` | Output in JSON format for automation |
-| `--manifest-url <URL>` | Custom manifest URL (default: https://vulns.io/apps.yml) |
+| `-y, --yes` | Auto-accept new manifests without prompting (for scripting) |
+| `--manifest-url <URL>` | Custom manifest URL (default: official vuln-pkg manifest) |
 | `--resolve-address <IP>` | IP address for hostname resolution (default: 127.0.0.1) |
 | `--domain <DOMAIN>` | Custom domain suffix (e.g., `lab.local`). Requires local DNS setup. |
 | `--https` | Enable HTTPS with self-signed certificates |
@@ -214,9 +247,77 @@ Applications with multiple ports get additional subdomains:
 - First port: `<app>.<domain>` (e.g., `webgoat.127.0.0.1.sslip.io`)
 - Additional ports: `<app>-<port>.<domain>` (e.g., `webgoat-9090.127.0.0.1.sslip.io`)
 
+### Manifest Trust
+
+When you use a manifest for the first time, vuln-pkg will display information about it and ask you to accept or reject it:
+
+```
+════════════════════════════════════════════════════════════
+  NEW MANIFEST
+════════════════════════════════════════════════════════════
+
+  URL:      https://example.com/manifest.yml
+  Author:   Security Lab Team
+  Email:    security@example.com
+  Website:  https://github.com/example/vuln-lab
+  About:    Custom vulnerable apps for internal training
+
+  Contains 5 application(s) available:
+    - custom-sqli
+    - custom-xss
+    ...
+
+════════════════════════════════════════════════════════════
+
+  ⚠ This manifest has not been accepted before.
+  Review the information above and decide whether to trust it.
+
+  Accept this manifest? [y/N/show]:
+```
+
+Options:
+- **y/yes** - Accept the manifest and remember the choice
+- **n/no** (or just Enter) - Reject and abort
+- **show** - Display the full manifest YAML for inspection before deciding
+
+Once accepted, the manifest is remembered and you won't be prompted again. Use `-y` flag to auto-accept for scripting:
+
+```bash
+vuln-pkg -y --manifest-url https://example.com/manifest.yml list
+```
+
+To manage accepted manifests:
+
+```bash
+# View all accepted manifests
+vuln-pkg manifest accepted
+
+# Forget a manifest (will prompt again next time)
+vuln-pkg manifest forget https://example.com/manifest.yml
+```
+
 ## Manifest Format
 
-vuln-pkg reads application definitions from a YAML manifest. There are three package types:
+vuln-pkg reads application definitions from a YAML manifest. A manifest contains metadata about the author and a list of applications.
+
+### Manifest Metadata
+
+Every manifest should include metadata to help users identify and trust it:
+
+```yaml
+meta:
+  author: "Security Lab Team"
+  email: "security@example.com"
+  url: "https://github.com/example/vuln-lab"
+  description: "Custom vulnerable apps for internal training"
+
+apps:
+  # ... application definitions
+```
+
+### Package Types
+
+There are three package types:
 
 ### Prebuilt Packages (Default)
 
@@ -230,7 +331,7 @@ apps:
     description: Damn Vulnerable Web Application
     ports:
       - 80
-    cve_tags:
+    tags:
       - CVE-2021-12345
     env:
       - MYSQL_ROOT_PASSWORD=root
@@ -253,7 +354,7 @@ apps:
       RUN chmod 777 /var/www/html
       EXPOSE 80
     ports: [80]
-    cve_tags:
+    tags:
       - SQL-Injection
     description: Custom SQL injection lab
 
@@ -280,7 +381,7 @@ apps:
     ref: main                    # Branch, tag, or commit (optional)
     dockerfile_path: ./Dockerfile  # Path to Dockerfile (optional, defaults to ./Dockerfile)
     ports: [3000]
-    cve_tags:
+    tags:
       - Custom
     description: Build from git repository
 ```
@@ -296,7 +397,7 @@ apps:
 | `type` | No | Package type: `prebuilt` (default), `dockerfile`, or `git` |
 | `description` | No | Human-readable description |
 | `ports` | Yes | List of container ports to expose |
-| `cve_tags` | No | Related CVE identifiers |
+| `tags` | No | Tags for categorization (CVEs, vulnerability types, etc.) |
 | `env` | No | Environment variables |
 
 #### Prebuilt Package Fields

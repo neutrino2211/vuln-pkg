@@ -27,6 +27,9 @@ pub enum VulnPkgError {
     #[error("Application '{0}' is a prebuilt package and cannot be rebuilt")]
     AppNotRebuildable(String),
 
+    #[error("Manifest was not accepted by the user")]
+    ManifestRejected,
+
     #[error("Manifest validation error: {0}")]
     ManifestValidation(String),
 

@@ -9,7 +9,7 @@ use std::net::Ipv4Addr;
 
 use clap::Parser;
 
-use cli::{Cli, Commands};
+use cli::{Cli, Commands, ManifestCommands};
 use docker::DockerManager;
 use error::{Result, VulnPkgError};
 use manifest::{Manifest, PackageType};
@@ -46,14 +46,24 @@ async fn run(cli: Cli, output: &Output) -> Result<()> {
     let state_mgr = StateManager::new()?;
     state_mgr.init()?;
 
+    // Sync state with Docker reality (containers may have stopped/been removed)
+    sync_state_with_docker(&state_mgr).await?;
+
     // Resolve domain: use provided domain or generate sslip.io domain for zero-config
     let domain = cli
         .domain
         .unwrap_or_else(|| sslip_domain(cli.resolve_address));
 
+    let auto_accept = cli.yes;
+
     match cli.command {
-        Commands::List => cmd_list(&cli.manifest_url, &state_mgr, output).await,
-        Commands::Install { app } => cmd_install(&app, &cli.manifest_url, &state_mgr, output).await,
+        Commands::List => cmd_list(&cli.manifest_url, &state_mgr, output, auto_accept).await,
+        Commands::Search { query } => {
+            cmd_search(&query, &cli.manifest_url, &state_mgr, output, auto_accept).await
+        }
+        Commands::Install { app } => {
+            cmd_install(&app, &cli.manifest_url, &state_mgr, output, auto_accept).await
+        }
         Commands::Run { app } => {
             cmd_run(
                 &app,
@@ -62,24 +72,133 @@ async fn run(cli: Cli, output: &Output) -> Result<()> {
                 output,
                 &domain,
                 cli.https,
+                auto_accept,
             )
             .await
         }
         Commands::Stop { app } => cmd_stop(&app, &state_mgr, output).await,
         Commands::Remove { app, purge } => cmd_remove(&app, &state_mgr, output, purge).await,
-        Commands::Rebuild { app } => cmd_rebuild(&app, &cli.manifest_url, &state_mgr, output).await,
+        Commands::Rebuild { app } => {
+            cmd_rebuild(&app, &cli.manifest_url, &state_mgr, output, auto_accept).await
+        }
         Commands::Status => cmd_status(&state_mgr, output).await,
+        Commands::Manifest { command } => {
+            cmd_manifest(command, &cli.manifest_url, &state_mgr, output, auto_accept).await
+        }
     }
 }
 
-async fn fetch_manifest(url: &str, state_mgr: &StateManager, output: &Output) -> Result<Manifest> {
+/// Sync state with Docker reality - update running status based on actual container state
+async fn sync_state_with_docker(state_mgr: &StateManager) -> Result<()> {
+    let mut state = state_mgr.load_state()?;
+    let mut changed = false;
+
+    // Check if Docker is available
+    let docker = match DockerManager::new() {
+        Ok(d) => d,
+        Err(_) => return Ok(()), // Docker not available, skip sync
+    };
+
+    // Check each app's container status
+    for (_name, app_state) in state.apps.iter_mut() {
+        if app_state.running {
+            if let Some(ref container_id) = app_state.container_id {
+                let actually_running = docker
+                    .container_running(container_id)
+                    .await
+                    .unwrap_or(false);
+                if !actually_running {
+                    app_state.running = false;
+                    changed = true;
+                }
+            } else {
+                // No container ID but marked as running - fix it
+                app_state.running = false;
+                changed = true;
+            }
+        }
+    }
+
+    // Also check Traefik status
+    if state.traefik_container_id.is_some() {
+        let traefik_running = docker.is_traefik_running().await?.is_some();
+        if !traefik_running {
+            state.traefik_container_id = None;
+            changed = true;
+        }
+    }
+
+    if changed {
+        state_mgr.save_state(&state)?;
+    }
+
+    Ok(())
+}
+
+async fn fetch_manifest(
+    url: &str,
+    state_mgr: &StateManager,
+    output: &Output,
+    auto_accept: bool,
+) -> Result<Manifest> {
     output.info(&format!("Fetching manifest from {}", url));
 
     let manifest = Manifest::fetch(url).await?;
 
-    // Warn if unsigned
-    if !manifest.is_signed() {
-        output.warning("Manifest is unsigned. In production, only use signed manifests.");
+    // Check if this manifest has been accepted before
+    let is_accepted = state_mgr.is_manifest_accepted(url)?;
+
+    if !is_accepted {
+        // Show manifest info
+        output.manifest_info(url, &manifest);
+
+        // Handle acceptance
+        let accepted = if auto_accept {
+            output.info("Auto-accepting manifest (-y flag)");
+            true
+        } else {
+            // Interactive prompt with show option
+            loop {
+                use std::io::{self, Write};
+                println!();
+                println!(
+                    "  {} This manifest has not been accepted before.",
+                    colored::Colorize::yellow("⚠")
+                );
+                println!("  Review the information above and decide whether to trust it.");
+                println!();
+                print!(
+                    "  {} ",
+                    colored::Colorize::bold("Accept this manifest? [y/N/show]:")
+                );
+                io::stdout().flush().unwrap();
+
+                let mut input = String::new();
+                if io::stdin().read_line(&mut input).is_err() {
+                    break false;
+                }
+
+                let input = input.trim().to_lowercase();
+                if input == "show" || input == "s" || input == "view" {
+                    // Show raw YAML and prompt again
+                    let yaml = serde_yaml::to_string(&manifest)?;
+                    output.show_manifest_yaml(&yaml);
+                    continue;
+                } else if input == "y" || input == "yes" {
+                    break true;
+                } else {
+                    break false;
+                }
+            }
+        };
+
+        if !accepted {
+            return Err(VulnPkgError::ManifestRejected);
+        }
+
+        // Save acceptance
+        state_mgr.accept_manifest(url, &manifest.meta)?;
+        output.success("Manifest accepted and remembered for future use");
     }
 
     // Cache the manifest
@@ -90,11 +209,56 @@ async fn fetch_manifest(url: &str, state_mgr: &StateManager, output: &Output) ->
     Ok(manifest)
 }
 
-async fn cmd_list(manifest_url: &str, state_mgr: &StateManager, output: &Output) -> Result<()> {
-    let manifest = fetch_manifest(manifest_url, state_mgr, output).await?;
+async fn cmd_list(
+    manifest_url: &str,
+    state_mgr: &StateManager,
+    output: &Output,
+    auto_accept: bool,
+) -> Result<()> {
+    let manifest = fetch_manifest(manifest_url, state_mgr, output, auto_accept).await?;
     let state = state_mgr.load_state()?;
 
     output.list_apps(&manifest.apps, &state.apps);
+    Ok(())
+}
+
+async fn cmd_search(
+    query: &str,
+    manifest_url: &str,
+    state_mgr: &StateManager,
+    output: &Output,
+    auto_accept: bool,
+) -> Result<()> {
+    let manifest = fetch_manifest(manifest_url, state_mgr, output, auto_accept).await?;
+    let state = state_mgr.load_state()?;
+
+    let query_lower = query.to_lowercase();
+
+    let matching_apps: Vec<&manifest::App> = manifest
+        .apps
+        .iter()
+        .filter(|app| {
+            // Match against name
+            if app.name.to_lowercase().contains(&query_lower) {
+                return true;
+            }
+            // Match against description
+            if app.description.to_lowercase().contains(&query_lower) {
+                return true;
+            }
+            // Match against tags
+            if app
+                .tags
+                .iter()
+                .any(|tag| tag.to_lowercase().contains(&query_lower))
+            {
+                return true;
+            }
+            false
+        })
+        .collect();
+
+    output.search_results(query, &matching_apps, &state.apps);
     Ok(())
 }
 
@@ -103,8 +267,9 @@ async fn cmd_install(
     manifest_url: &str,
     state_mgr: &StateManager,
     output: &Output,
+    auto_accept: bool,
 ) -> Result<()> {
-    let manifest = fetch_manifest(manifest_url, state_mgr, output).await?;
+    let manifest = fetch_manifest(manifest_url, state_mgr, output, auto_accept).await?;
 
     let app = manifest
         .find_app(app_name)
@@ -188,8 +353,9 @@ async fn cmd_run(
     output: &Output,
     domain: &str,
     https: bool,
+    auto_accept: bool,
 ) -> Result<()> {
-    let manifest = fetch_manifest(manifest_url, state_mgr, output).await?;
+    let manifest = fetch_manifest(manifest_url, state_mgr, output, auto_accept).await?;
 
     let app = manifest
         .find_app(app_name)
@@ -214,7 +380,7 @@ async fn cmd_run(
     // Ensure image exists (install if needed)
     if !docker.image_exists(&effective_image).await? {
         // Delegate to install logic for building/pulling
-        cmd_install(app_name, manifest_url, state_mgr, output).await?;
+        cmd_install(app_name, manifest_url, state_mgr, output, auto_accept).await?;
         // Reload state after install
         state = state_mgr.load_state()?;
     }
@@ -351,8 +517,9 @@ async fn cmd_rebuild(
     manifest_url: &str,
     state_mgr: &StateManager,
     output: &Output,
+    auto_accept: bool,
 ) -> Result<()> {
-    let manifest = fetch_manifest(manifest_url, state_mgr, output).await?;
+    let manifest = fetch_manifest(manifest_url, state_mgr, output, auto_accept).await?;
 
     let app = manifest
         .find_app(app_name)
@@ -446,4 +613,53 @@ async fn cmd_status(state_mgr: &StateManager, output: &Output) -> Result<()> {
 
     output.status(&status_info);
     Ok(())
+}
+
+async fn cmd_manifest(
+    command: ManifestCommands,
+    manifest_url: &str,
+    state_mgr: &StateManager,
+    output: &Output,
+    _auto_accept: bool,
+) -> Result<()> {
+    match command {
+        ManifestCommands::Show => {
+            // Fetch manifest without acceptance check for viewing
+            output.info(&format!("Fetching manifest from {}", manifest_url));
+            let manifest = Manifest::fetch(manifest_url).await?;
+
+            // Show manifest info
+            output.manifest_info(manifest_url, &manifest);
+
+            // Show raw YAML
+            let yaml = serde_yaml::to_string(&manifest)?;
+            output.show_manifest_yaml(&yaml);
+
+            // Show acceptance status
+            let is_accepted = state_mgr.is_manifest_accepted(manifest_url)?;
+            if is_accepted {
+                output.success("This manifest has been previously accepted");
+            } else {
+                output.warning("This manifest has NOT been accepted yet");
+            }
+
+            Ok(())
+        }
+        ManifestCommands::Forget { url } => {
+            let url_to_forget = url.as_deref().unwrap_or(manifest_url);
+
+            if state_mgr.forget_manifest(url_to_forget)? {
+                output.manifest_forgotten(url_to_forget);
+            } else {
+                output.manifest_not_accepted(url_to_forget);
+            }
+
+            Ok(())
+        }
+        ManifestCommands::Accepted => {
+            let accepted = state_mgr.load_accepted_manifests()?;
+            output.list_accepted_manifests(&accepted);
+            Ok(())
+        }
+    }
 }

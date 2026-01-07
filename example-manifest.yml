@@ -1,12 +1,18 @@
 # Example vuln-pkg manifest
 # Host this file and point vuln-pkg to it with --manifest-url
 
+meta:
+  author: "Your Name"
+  email: "your.email@example.com"
+  url: "https://github.com/your-username/your-manifest"
+  description: "A collection of vulnerable applications for security training"
+
 apps:
   - name: dvwa
     version: "1.0"
     image: vulnerables/web-dvwa
     ports: [80]
-    cve_tags:
+    tags:
       - CVE-2017-16651
       - SQL-Injection
       - XSS
@@ -19,7 +25,7 @@ apps:
     version: "14.0"
     image: bkimminich/juice-shop
     ports: [3000]
-    cve_tags:
+    tags:
       - OWASP-Top-10
       - Injection
       - Broken-Auth
@@ -29,7 +35,7 @@ apps:
     version: "8.2"
     image: webgoat/webgoat
     ports: [8080, 9090]
-    cve_tags:
+    tags:
       - OWASP-Top-10
     description: "OWASP WebGoat - Java-based deliberately insecure application"
 
@@ -37,7 +43,7 @@ apps:
     version: "2.6"
     image: citizenstig/nowasp
     ports: [80]
-    cve_tags:
+    tags:
       - SQL-Injection
       - XSS
       - LDAP-Injection
@@ -47,7 +53,7 @@ apps:
     version: "1.0"
     image: pierrickv/hackazon
     ports: [80, 443]
-    cve_tags:
+    tags:
       - REST-API
       - SQL-Injection
     description: "Hackazon - Vulnerable test e-commerce site with REST API"
@@ -56,7 +62,7 @@ apps:
     version: "2.2"
     image: raesene/bwapp
     ports: [80]
-    cve_tags:
+    tags:
       - OWASP-Top-10
     description: "bWAPP - Buggy Web Application with 100+ vulnerabilities"
 
@@ -64,7 +70,7 @@ apps:
     version: "1.0"
     image: erev0s/vampi
     ports: [5000]
-    cve_tags:
+    tags:
       - API-Security
       - OWASP-API-Top-10
     description: "VAmPI - Vulnerable REST API for API security testing"
@@ -82,7 +88,7 @@ apps:
       RUN chmod 777 /var/www/html
       EXPOSE 80
     ports: [80]
-    cve_tags:
+    tags:
       - SQL-Injection
       - Custom-Lab
     description: "Custom SQL injection lab - built from inline Dockerfile"
@@ -104,7 +110,7 @@ apps:
   #   ref: main
   #   dockerfile_path: ./Dockerfile
   #   ports: [3000]
-  #   cve_tags:
+  #   tags:
   #     - Custom
   #   description: "Git-based vulnerable lab - cloned and built from repository"
 

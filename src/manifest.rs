@@ -15,8 +15,28 @@ pub enum PackageType {
     Git,
 }
 
+/// Metadata about the manifest author/maintainer
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ManifestMeta {
+    /// Name of the manifest author or organization
+    #[serde(default)]
+    pub author: Option<String>,
+    /// Contact email for the manifest maintainer
+    #[serde(default)]
+    pub email: Option<String>,
+    /// URL for more information (website, repo, etc.)
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Description of what this manifest provides
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
+    /// Metadata about the manifest author
+    #[serde(default)]
+    pub meta: ManifestMeta,
     pub apps: Vec<App>,
     #[serde(default)]
     pub signature: Option<String>,
@@ -31,7 +51,7 @@ pub struct App {
     pub image: Option<String>,
     pub ports: Vec<u16>,
     #[serde(default)]
-    pub cve_tags: Vec<String>,
+    pub tags: Vec<String>,
     #[serde(default)]
     pub description: String,
     #[serde(default)]
@@ -161,6 +181,7 @@ impl Manifest {
         self.apps.iter().find(|app| app.name == name)
     }
 
+    #[allow(dead_code)]
     pub fn is_signed(&self) -> bool {
         self.signature.is_some()
     }
@@ -178,7 +199,7 @@ apps:
     version: "1.0"
     image: vulnerables/web-dvwa
     ports: [80]
-    cve_tags: [CVE-2021-1234]
+    tags: [CVE-2021-1234]
     description: "Damn Vulnerable Web Application"
 "#;
         let manifest = Manifest::parse(yaml).unwrap();
