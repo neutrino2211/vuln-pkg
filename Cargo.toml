@@ -36,8 +36,8 @@ colored = "2"
 directories = "5"
 futures = "0.3"
 
-# Git operations
-git2 = "0.19"
+# Git operations (vendored for cross-platform builds)
+git2 = { version = "0.19", features = ["vendored-libgit2", "vendored-openssl"] }
 
 # Build context (tarball creation)
 tar = "0.4"
