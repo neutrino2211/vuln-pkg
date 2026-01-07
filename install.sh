@@ -105,11 +105,7 @@ main() {
 
     # Determine binary name
     ASSET_NAME="${BINARY_NAME}-${OS}-${ARCH}"
-
-    # Use musl build for Linux x86_64 for better compatibility
-    if [ "$OS" = "linux" ] && [ "$ARCH" = "x86_64" ]; then
-        ASSET_NAME="${BINARY_NAME}-${OS}-${ARCH}-musl"
-    fi
+    info "Fetching asset name: ${ASSET_NAME}"
 
     # Get version
     if [ -n "$VULN_PKG_VERSION" ]; then
