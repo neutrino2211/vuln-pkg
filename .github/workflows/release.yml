@@ -1,100 +1,103 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
-
-env:
-  CARGO_TERM_COLOR: always
+  release:
+    types: [created]
 
 jobs:
-  build:
-    name: Build (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
+  release:
+    name: Release ${{ matrix.target }}
+    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            name: vuln-pkg-linux-x86_64
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            name: vuln-pkg-linux-x86_64-musl
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            name: vuln-pkg-linux-aarch64
+            archive: tar.gz
+            name: vuln-pkg-linux-x86_64
           - target: x86_64-apple-darwin
-            os: macos-latest
+            archive: tar.gz
             name: vuln-pkg-darwin-x86_64
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            name: vuln-pkg-darwin-aarch64
+          - target: x86_64-pc-windows-gnu
+            archive: zip
+            name: vuln-pkg-windows-x86_64
 
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile and release
+        uses: rust-build/rust-build.action@v1.4.5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          RUSTTARGET: ${{ matrix.target }}
+          ARCHIVE_TYPES: ${{ matrix.archive }}
+          MINIFY: "true"
+
+  # Build ARM64 targets using native runners
+  release-macos-arm:
+    name: Release aarch64-apple-darwin
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin
 
-      - name: Install musl tools (Linux musl)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: cargo build --release --target aarch64-apple-darwin
 
-      - name: Install cross-compilation tools (Linux aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      - name: Package
+        run: |
+          cd target/aarch64-apple-darwin/release
+          tar czvf ../../../vuln-pkg-darwin-aarch64.tar.gz vuln-pkg
+          cd ../../..
+          shasum -a 256 vuln-pkg-darwin-aarch64.tar.gz > vuln-pkg-darwin-aarch64.tar.gz.sha256
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            vuln-pkg-darwin-aarch64.tar.gz
+            vuln-pkg-darwin-aarch64.tar.gz.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-linux-arm:
+    name: Release aarch64-unknown-linux-gnu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Install cross-compilation tools
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --target aarch64-unknown-linux-gnu
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
-      - name: Prepare binary
+      - name: Package
         run: |
-          cd target/${{ matrix.target }}/release
-          tar czvf ../../../${{ matrix.name }}.tar.gz vuln-pkg
+          cd target/aarch64-unknown-linux-gnu/release
+          tar czvf ../../../vuln-pkg-linux-aarch64.tar.gz vuln-pkg
           cd ../../..
-          shasum -a 256 ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
+          sha256sum vuln-pkg-linux-aarch64.tar.gz > vuln-pkg-linux-aarch64.tar.gz.sha256
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.name }}
-          path: |
-            ${{ matrix.name }}.tar.gz
-            ${{ matrix.name }}.tar.gz.sha256
-
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Prepare release files
-        run: |
-          mkdir release
-          find artifacts -type f \( -name "*.tar.gz" -o -name "*.sha256" \) -exec mv {} release/ \;
-          cd release && cat *.sha256 > checksums.txt
-
-      - name: Create GitHub Release
+      - name: Upload to release
         uses: softprops/action-gh-release@v1
         with:
-          files: release/*
-          generate_release_notes: true
-          draft: false
-          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
+          files: |
+            vuln-pkg-linux-aarch64.tar.gz
+            vuln-pkg-linux-aarch64.tar.gz.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

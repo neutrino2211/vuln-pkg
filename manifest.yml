@@ -1,0 +1,112 @@
+# Example vuln-pkg manifest
+# Host this file and point vuln-pkg to it with --manifest-url
+
+apps:
+  - name: dvwa
+    version: "1.0"
+    image: vulnerables/web-dvwa
+    ports: [80]
+    cve_tags:
+      - CVE-2017-16651
+      - SQL-Injection
+      - XSS
+      - CSRF
+    description: "Damn Vulnerable Web Application - PHP/MySQL web app for security testing"
+    env:
+      - "MYSQL_ROOT_PASSWORD=dvwa"
+
+  - name: juice-shop
+    version: "14.0"
+    image: bkimminich/juice-shop
+    ports: [3000]
+    cve_tags:
+      - OWASP-Top-10
+      - Injection
+      - Broken-Auth
+    description: "OWASP Juice Shop - Modern vulnerable Node.js/Angular web application"
+
+  - name: webgoat
+    version: "8.2"
+    image: webgoat/webgoat
+    ports: [8080, 9090]
+    cve_tags:
+      - OWASP-Top-10
+    description: "OWASP WebGoat - Java-based deliberately insecure application"
+
+  - name: mutillidae
+    version: "2.6"
+    image: citizenstig/nowasp
+    ports: [80]
+    cve_tags:
+      - SQL-Injection
+      - XSS
+      - LDAP-Injection
+    description: "NOWASP Mutillidae II - Free, open source web app for security training"
+
+  - name: hackazon
+    version: "1.0"
+    image: pierrickv/hackazon
+    ports: [80, 443]
+    cve_tags:
+      - REST-API
+      - SQL-Injection
+    description: "Hackazon - Vulnerable test e-commerce site with REST API"
+
+  - name: bwapp
+    version: "2.2"
+    image: raesene/bwapp
+    ports: [80]
+    cve_tags:
+      - OWASP-Top-10
+    description: "bWAPP - Buggy Web Application with 100+ vulnerabilities"
+
+  - name: vampi
+    version: "1.0"
+    image: erev0s/vampi
+    ports: [5000]
+    cve_tags:
+      - API-Security
+      - OWASP-API-Top-10
+    description: "VAmPI - Vulnerable REST API for API security testing"
+
+  # ==================== Custom Package Examples ====================
+
+  # Example: Dockerfile-based package (inline Dockerfile)
+  - name: custom-sqli-lab
+    version: "1.0"
+    type: dockerfile
+    dockerfile: |
+      FROM php:8.0-apache
+      RUN docker-php-ext-install mysqli pdo pdo_mysql
+      COPY index.php /var/www/html/
+      RUN chmod 777 /var/www/html
+      EXPOSE 80
+    ports: [80]
+    cve_tags:
+      - SQL-Injection
+      - Custom-Lab
+    description: "Custom SQL injection lab - built from inline Dockerfile"
+
+  # Example: Dockerfile-based package (remote Dockerfile)
+  # - name: remote-vuln-app
+  #   version: "1.0"
+  #   type: dockerfile
+  #   dockerfile_url: https://example.com/vuln-apps/sqli/Dockerfile
+  #   context_url: https://example.com/vuln-apps/sqli/context.tar.gz
+  #   ports: [8080]
+  #   description: "Remote vulnerable app - fetches Dockerfile and context from URLs"
+
+  # Example: Git-based package
+  # - name: git-vuln-lab
+  #   version: "1.0"
+  #   type: git
+  #   repo: https://github.com/example/vulnerable-app.git
+  #   ref: main
+  #   dockerfile_path: ./Dockerfile
+  #   ports: [3000]
+  #   cve_tags:
+  #     - Custom
+  #   description: "Git-based vulnerable lab - cloned and built from repository"
+
+# Signature placeholder - unsigned manifests show a warning
+signature: null
