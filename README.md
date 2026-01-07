@@ -49,15 +49,34 @@ VULN_PKG_VERSION=v0.2.0 curl -fsSL https://raw.githubusercontent.com/neutrino221
 VULN_PKG_INSTALL_DIR=~/bin curl -fsSL https://raw.githubusercontent.com/neutrino2211/vuln-pkg/main/install.sh | bash
 ```
 
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/neutrino2211/vuln-pkg/main/install.ps1 | iex
+```
+
+This will download the latest release and install it to `%LOCALAPPDATA%\vuln-pkg`.
+
+#### Install Options (PowerShell)
+
+```powershell
+# Install a specific version
+$env:VULN_PKG_VERSION="v0.2.0"; irm https://raw.githubusercontent.com/neutrino2211/vuln-pkg/main/install.ps1 | iex
+
+# Install to a custom directory
+$env:VULN_PKG_INSTALL_DIR="C:\tools"; irm https://raw.githubusercontent.com/neutrino2211/vuln-pkg/main/install.ps1 | iex
+```
+
 ### Download from Releases
 
 Download pre-built binaries from the [GitHub Releases](https://github.com/neutrino2211/vuln-pkg/releases) page.
 
 Available binaries:
-- `vuln-pkg-linux-x86_64-musl.tar.gz` - Linux x86_64 (static binary, works on any distro)
+- `vuln-pkg-linux-x86_64.tar.gz` - Linux x86_64 (static binary, works on any distro)
 - `vuln-pkg-linux-aarch64.tar.gz` - Linux ARM64
 - `vuln-pkg-darwin-x86_64.tar.gz` - macOS Intel
 - `vuln-pkg-darwin-aarch64.tar.gz` - macOS Apple Silicon
+- `vuln-pkg-windows-x86_64.zip` - Windows x86_64
 
 ### Build from Source
 
