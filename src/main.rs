@@ -198,14 +198,13 @@ async fn cmd_run(
     let mut state = state_mgr.load_state()?;
 
     // Check if already running
-    if let Some(app_state) = state.apps.get(&app.name) {
-        if app_state.running {
-            if let Some(ref container_id) = app_state.container_id {
-                let docker = DockerManager::new()?;
-                if docker.container_running(container_id).await? {
-                    return Err(VulnPkgError::AppAlreadyRunning(app_name.to_string()));
-                }
-            }
+    if let Some(app_state) = state.apps.get(&app.name)
+        && app_state.running
+        && let Some(ref container_id) = app_state.container_id
+    {
+        let docker = DockerManager::new()?;
+        if docker.container_running(container_id).await? {
+            return Err(VulnPkgError::AppAlreadyRunning(app_name.to_string()));
         }
     }
 

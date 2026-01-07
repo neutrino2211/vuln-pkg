@@ -38,18 +38,16 @@ impl Output {
     }
 
     pub fn debug(&self, msg: &str) {
-        if !self.json {
-            if tracing::enabled!(tracing::Level::DEBUG) {
-                println!("{} {}", "[D]".dimmed(), msg.dimmed());
-            }
+        if !self.json && tracing::enabled!(tracing::Level::DEBUG) {
+            println!("{} {}", "[D]".dimmed(), msg.dimmed());
         }
     }
 
     pub fn json<T: Serialize>(&self, data: &T) {
-        if self.json {
-            if let Ok(json) = serde_json::to_string_pretty(data) {
-                println!("{}", json);
-            }
+        if self.json
+            && let Ok(json) = serde_json::to_string_pretty(data)
+        {
+            println!("{}", json);
         }
     }
 
@@ -126,11 +124,12 @@ impl Output {
                 }
 
                 // Show hostnames if running
-                if let Some(s) = state {
-                    if s.running && !s.hostnames.is_empty() {
-                        for hostname in &s.hostnames {
-                            println!("    URL: {}", format!("http://{}", hostname).cyan());
-                        }
+                if let Some(s) = state
+                    && s.running
+                    && !s.hostnames.is_empty()
+                {
+                    for hostname in &s.hostnames {
+                        println!("    URL: {}", format!("http://{}", hostname).cyan());
                     }
                 }
 

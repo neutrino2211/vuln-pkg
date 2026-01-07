@@ -46,10 +46,10 @@ impl DockerManager {
         let networks = self.docker.list_networks(Some(options)).await?;
 
         for network in networks {
-            if network.name.as_deref() == Some(NETWORK_NAME) {
-                if let Some(id) = network.id {
-                    return Ok(id);
-                }
+            if network.name.as_deref() == Some(NETWORK_NAME)
+                && let Some(id) = network.id
+            {
+                return Ok(id);
             }
         }
 
@@ -68,6 +68,7 @@ impl DockerManager {
         Ok(response.id)
     }
 
+    #[allow(dead_code)]
     pub async fn remove_network(&self, network_id: &str) -> Result<()> {
         self.docker.remove_network(network_id).await?;
         Ok(())
@@ -88,21 +89,20 @@ impl DockerManager {
         let containers = self.docker.list_containers(Some(options)).await?;
 
         for container in containers {
-            if let Some(names) = &container.names {
-                if names
+            if let Some(names) = &container.names
+                && names
                     .iter()
                     .any(|n| n == &format!("/{}", TRAEFIK_CONTAINER))
-                {
-                    let running = container.state.as_deref() == Some("running");
-                    if running {
-                        return Ok(container.id);
-                    } else {
-                        // Container exists but not running - remove and recreate
-                        if let Some(id) = &container.id {
-                            self.remove_container(id).await?;
-                        }
-                        return Ok(None);
+            {
+                let running = container.state.as_deref() == Some("running");
+                if running {
+                    return Ok(container.id);
+                } else {
+                    // Container exists but not running - remove and recreate
+                    if let Some(id) = &container.id {
+                        self.remove_container(id).await?;
                     }
+                    return Ok(None);
                 }
             }
         }
@@ -264,6 +264,7 @@ impl DockerManager {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn remove_image(&self, image: &str) -> Result<()> {
         self.docker.remove_image(image, None, None).await?;
         Ok(())

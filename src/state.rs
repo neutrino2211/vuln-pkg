@@ -89,6 +89,7 @@ impl StateManager {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn base_dir(&self) -> &PathBuf {
         &self.base_dir
     }
@@ -133,6 +134,7 @@ impl StateManager {
         Ok(path)
     }
 
+    #[allow(dead_code)]
     pub fn get_cached_manifest(&self, url: &str) -> Option<PathBuf> {
         let filename = url_to_filename(url);
         let path = self.manifests_dir().join(filename);
