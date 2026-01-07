@@ -41,7 +41,7 @@ This will automatically detect your OS and architecture, download the latest rel
 
 ```bash
 # Install a specific version
-VULN_PKG_VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/neutrino2211/vuln-pkg/main/install.sh | bash
+VULN_PKG_VERSION=v0.2.0 curl -fsSL https://raw.githubusercontent.com/neutrino2211/vuln-pkg/main/install.sh | bash
 
 # Install to a custom directory
 VULN_PKG_INSTALL_DIR=~/bin curl -fsSL https://raw.githubusercontent.com/neutrino2211/vuln-pkg/main/install.sh | bash
