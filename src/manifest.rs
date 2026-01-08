@@ -1,6 +1,153 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{Result, VulnPkgError};
+
+/// Protocol for exposing a port
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Protocol {
+    /// HTTP protocol - routed through Traefik reverse proxy
+    #[default]
+    Http,
+    /// Raw TCP protocol - direct port mapping
+    Tcp,
+    /// UDP protocol - direct port mapping
+    Udp,
+}
+
+impl std::fmt::Display for Protocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Protocol::Http => write!(f, "http"),
+            Protocol::Tcp => write!(f, "tcp"),
+            Protocol::Udp => write!(f, "udp"),
+        }
+    }
+}
+
+/// Port configuration with protocol and optional label
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PortConfig {
+    /// Container port number
+    pub port: u16,
+    /// Protocol (http, tcp, udp) - defaults to http
+    #[serde(default)]
+    pub protocol: Protocol,
+    /// Optional human-readable label for this port
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+impl PortConfig {
+    /// Create a new HTTP port config (default)
+    pub fn http(port: u16) -> Self {
+        Self {
+            port,
+            protocol: Protocol::Http,
+            label: None,
+        }
+    }
+
+    /// Create a new TCP port config
+    #[allow(dead_code)]
+    pub fn tcp(port: u16) -> Self {
+        Self {
+            port,
+            protocol: Protocol::Tcp,
+            label: None,
+        }
+    }
+
+    /// Create a new UDP port config
+    #[allow(dead_code)]
+    pub fn udp(port: u16) -> Self {
+        Self {
+            port,
+            protocol: Protocol::Udp,
+            label: None,
+        }
+    }
+
+    /// Check if this port uses HTTP protocol (routed through Traefik)
+    pub fn is_http(&self) -> bool {
+        self.protocol == Protocol::Http
+    }
+
+    /// Check if this port needs direct port mapping (TCP/UDP)
+    pub fn needs_direct_mapping(&self) -> bool {
+        matches!(self.protocol, Protocol::Tcp | Protocol::Udp)
+    }
+}
+
+/// Wrapper to support both simple port numbers and full PortConfig objects
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(untagged)]
+pub enum PortEntry {
+    Simple(u16),
+    Config(PortConfig),
+}
+
+impl<'de> Deserialize<'de> for PortEntry {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::{self, MapAccess, Visitor};
+
+        struct PortEntryVisitor;
+
+        impl<'de> Visitor<'de> for PortEntryVisitor {
+            type Value = PortEntry;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a port number or port configuration object")
+            }
+
+            fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(PortEntry::Simple(value as u16))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(PortEntry::Simple(value as u16))
+            }
+
+            fn visit_map<M>(self, map: M) -> std::result::Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let config = PortConfig::deserialize(de::value::MapAccessDeserializer::new(map))?;
+                Ok(PortEntry::Config(config))
+            }
+        }
+
+        deserializer.deserialize_any(PortEntryVisitor)
+    }
+}
+
+impl PortEntry {
+    /// Convert to PortConfig
+    pub fn to_config(&self) -> PortConfig {
+        match self {
+            PortEntry::Simple(port) => PortConfig::http(*port),
+            PortEntry::Config(config) => config.clone(),
+        }
+    }
+
+    /// Get the port number
+    #[allow(dead_code)]
+    pub fn port(&self) -> u16 {
+        match self {
+            PortEntry::Simple(port) => *port,
+            PortEntry::Config(config) => config.port,
+        }
+    }
+}
 
 /// Package type determines how the Docker image is obtained
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -49,7 +196,8 @@ pub struct App {
     /// Docker image (required for prebuilt, ignored for dockerfile/git)
     #[serde(default)]
     pub image: Option<String>,
-    pub ports: Vec<u16>,
+    /// Ports exposed by this application (can be simple numbers or full config)
+    pub ports: Vec<PortEntry>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
@@ -95,6 +243,41 @@ impl App {
                 format!("vuln-pkg/{}:{}", self.name, self.version)
             }
         }
+    }
+
+    /// Get all port configurations (converts simple ports to PortConfig)
+    pub fn port_configs(&self) -> Vec<PortConfig> {
+        self.ports.iter().map(|p| p.to_config()).collect()
+    }
+
+    /// Get only HTTP ports (routed through Traefik)
+    pub fn http_ports(&self) -> Vec<PortConfig> {
+        self.port_configs()
+            .into_iter()
+            .filter(|p| p.is_http())
+            .collect()
+    }
+
+    /// Get only TCP/UDP ports (direct port mapping)
+    pub fn direct_ports(&self) -> Vec<PortConfig> {
+        self.port_configs()
+            .into_iter()
+            .filter(|p| p.needs_direct_mapping())
+            .collect()
+    }
+
+    /// Check if this app has any TCP/UDP ports that need direct mapping
+    #[allow(dead_code)]
+    pub fn has_direct_ports(&self) -> bool {
+        self.ports
+            .iter()
+            .any(|p| p.to_config().needs_direct_mapping())
+    }
+
+    /// Get simple list of port numbers (for backward compatibility)
+    #[allow(dead_code)]
+    pub fn port_numbers(&self) -> Vec<u16> {
+        self.ports.iter().map(|p| p.port()).collect()
     }
 
     /// Validates that required fields are present for the package type
@@ -205,7 +388,7 @@ apps:
         let manifest = Manifest::parse(yaml).unwrap();
         assert_eq!(manifest.apps.len(), 1);
         assert_eq!(manifest.apps[0].name, "dvwa");
-        assert_eq!(manifest.apps[0].ports, vec![80]);
+        assert_eq!(manifest.apps[0].port_numbers(), vec![80]);
         assert_eq!(manifest.apps[0].package_type, PackageType::Prebuilt);
         assert_eq!(manifest.apps[0].effective_image(), "vulnerables/web-dvwa");
     }
@@ -295,6 +478,11 @@ apps:
 "#;
         let manifest = Manifest::parse(yaml).unwrap();
         assert_eq!(manifest.apps[0].package_type, PackageType::Prebuilt);
+        // Simple ports should default to HTTP protocol
+        let configs = manifest.apps[0].port_configs();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].port, 80);
+        assert_eq!(configs[0].protocol, Protocol::Http);
     }
 
     #[test]
@@ -339,5 +527,89 @@ apps:
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("requires 'repo' field"));
+    }
+
+    #[test]
+    fn test_port_config_with_protocol() {
+        let yaml = r#"
+apps:
+  - name: mongobleed
+    version: "8.0.16"
+    image: mongo:8.0.16
+    ports:
+      - port: 27017
+        protocol: tcp
+        label: MongoDB
+    description: "MongoDB with MongoBleed vulnerability"
+"#;
+        let manifest = Manifest::parse(yaml).unwrap();
+        let app = &manifest.apps[0];
+        assert_eq!(app.port_numbers(), vec![27017]);
+
+        let configs = app.port_configs();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].port, 27017);
+        assert_eq!(configs[0].protocol, Protocol::Tcp);
+        assert_eq!(configs[0].label.as_deref(), Some("MongoDB"));
+
+        assert!(app.has_direct_ports());
+        assert!(app.http_ports().is_empty());
+        assert_eq!(app.direct_ports().len(), 1);
+    }
+
+    #[test]
+    fn test_mixed_port_protocols() {
+        let yaml = r#"
+apps:
+  - name: multi-port-app
+    version: "1.0"
+    image: example/multi
+    ports:
+      - port: 80
+        protocol: http
+        label: Web Admin
+      - port: 27017
+        protocol: tcp
+        label: MongoDB
+      - 8080
+    description: "App with mixed protocols"
+"#;
+        let manifest = Manifest::parse(yaml).unwrap();
+        let app = &manifest.apps[0];
+
+        assert_eq!(app.port_numbers(), vec![80, 27017, 8080]);
+
+        let http_ports = app.http_ports();
+        assert_eq!(http_ports.len(), 2); // port 80 and 8080 (default)
+        assert_eq!(http_ports[0].port, 80);
+        assert_eq!(http_ports[1].port, 8080);
+
+        let direct_ports = app.direct_ports();
+        assert_eq!(direct_ports.len(), 1);
+        assert_eq!(direct_ports[0].port, 27017);
+        assert_eq!(direct_ports[0].protocol, Protocol::Tcp);
+
+        assert!(app.has_direct_ports());
+    }
+
+    #[test]
+    fn test_udp_protocol() {
+        let yaml = r#"
+apps:
+  - name: dns-vuln
+    version: "1.0"
+    image: example/dns
+    ports:
+      - port: 53
+        protocol: udp
+        label: DNS
+"#;
+        let manifest = Manifest::parse(yaml).unwrap();
+        let app = &manifest.apps[0];
+
+        let configs = app.port_configs();
+        assert_eq!(configs[0].protocol, Protocol::Udp);
+        assert!(configs[0].needs_direct_mapping());
+        assert!(!configs[0].is_http());
     }
 }

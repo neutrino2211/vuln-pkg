@@ -407,6 +407,49 @@ apps:
     description: Build from git repository
 ```
 
+### Port Configuration
+
+Ports can be specified as simple numbers (HTTP by default) or as objects with protocol configuration:
+
+```yaml
+apps:
+  # Simple port (HTTP, routed through Traefik)
+  - name: dvwa
+    ports: [80]
+
+  # TCP port (direct mapping, e.g., for databases)
+  - name: mongobleed
+    ports:
+      - port: 27017
+        protocol: tcp
+        label: MongoDB
+
+  # Mixed protocols (HTTP + TCP/UDP)
+  - name: vulnerable-app
+    ports:
+      - port: 80
+        protocol: http
+        label: Web Admin
+      - port: 27017
+        protocol: tcp
+        label: MongoDB
+      - port: 53
+        protocol: udp
+        label: DNS
+```
+
+**Protocols:**
+- `http` (default): Routed through Traefik reverse proxy with subdomain URLs
+- `tcp`: Direct port mapping for raw TCP protocols (databases, custom services)
+- `udp`: Direct port mapping for UDP protocols (DNS, etc.)
+
+TCP/UDP ports are allocated from the range 40000-49999 and accessed directly:
+```
+[+] Started mongobleed
+
+  -> [TCP] mongobleed.127.0.0.1.sslip.io:40001 (MongoDB)
+```
+
 ### Manifest Fields Reference
 
 #### Common Fields (All Package Types)
@@ -417,9 +460,17 @@ apps:
 | `version` | Yes | Version string |
 | `type` | No | Package type: `prebuilt` (default), `dockerfile`, or `git` |
 | `description` | No | Human-readable description |
-| `ports` | Yes | List of container ports to expose |
+| `ports` | Yes | List of ports (numbers or port config objects) |
 | `tags` | No | Tags for categorization (CVEs, vulnerability types, etc.) |
 | `env` | No | Environment variables |
+
+#### Port Configuration Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `port` | Yes | Container port number |
+| `protocol` | No | Protocol: `http` (default), `tcp`, or `udp` |
+| `label` | No | Human-readable label for this port |
 
 #### Prebuilt Package Fields
 

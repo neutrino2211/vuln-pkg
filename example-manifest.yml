@@ -11,7 +11,10 @@ apps:
   - name: dvwa
     version: "1.0"
     image: vulnerables/web-dvwa
-    ports: [80]
+    ports:
+      - port: 80
+        protocol: http
+        label: Web UI
     tags:
       - CVE-2017-16651
       - SQL-Injection
@@ -24,7 +27,9 @@ apps:
   - name: juice-shop
     version: "14.0"
     image: bkimminich/juice-shop
-    ports: [3000]
+    ports:
+      - port: 3000
+        label: Web UI
     tags:
       - OWASP-Top-10
       - Injection
@@ -34,7 +39,11 @@ apps:
   - name: webgoat
     version: "8.2"
     image: webgoat/webgoat
-    ports: [8080, 9090]
+    ports:
+      - port: 8080
+        label: WebGoat
+      - port: 9090
+        label: WebWolf
     tags:
       - OWASP-Top-10
     description: "OWASP WebGoat - Java-based deliberately insecure application"
@@ -52,7 +61,11 @@ apps:
   - name: hackazon
     version: "1.0"
     image: pierrickv/hackazon
-    ports: [80, 443]
+    ports:
+      - port: 80
+        label: HTTP
+      - port: 443
+        label: HTTPS
     tags:
       - REST-API
       - SQL-Injection
@@ -69,11 +82,59 @@ apps:
   - name: vampi
     version: "1.0"
     image: erev0s/vampi
-    ports: [5000]
+    ports:
+      - port: 5000
+        label: REST API
     tags:
       - API-Security
       - OWASP-API-Top-10
     description: "VAmPI - Vulnerable REST API for API security testing"
+
+  # ==================== TCP/UDP Protocol Examples ====================
+
+  # Example: MongoDB with MongoBleed vulnerability (TCP protocol)
+  # - name: mongobleed
+  #   version: "8.0.16"
+  #   image: mongo:8.0.16
+  #   ports:
+  #     - port: 27017
+  #       protocol: tcp
+  #       label: MongoDB
+  #   tags:
+  #     - CVE-2025-14847
+  #     - Memory-Leak
+  #   description: "MongoDB with MongoBleed vulnerability - memory disclosure via zlib"
+
+  # Example: Redis with unauthenticated access (TCP protocol)
+  # - name: redis-unauth
+  #   version: "6.0"
+  #   image: redis:6.0
+  #   ports:
+  #     - port: 6379
+  #       protocol: tcp
+  #       label: Redis
+  #   tags:
+  #     - Unauthenticated
+  #     - RCE
+  #   description: "Redis without authentication - for testing unauthorized access"
+
+  # Example: Mixed protocols (HTTP admin + TCP database)
+  # - name: vulnerable-app-full
+  #   version: "1.0"
+  #   image: example/vulnerable-app
+  #   ports:
+  #     - port: 80
+  #       protocol: http
+  #       label: Web Admin
+  #     - port: 3306
+  #       protocol: tcp
+  #       label: MySQL
+  #     - port: 6379
+  #       protocol: tcp
+  #       label: Redis
+  #   tags:
+  #     - Multi-Service
+  #   description: "Full stack vulnerable app with web UI and exposed databases"
 
   # ==================== Custom Package Examples ====================
 
@@ -87,7 +148,9 @@ apps:
       COPY index.php /var/www/html/
       RUN chmod 777 /var/www/html
       EXPOSE 80
-    ports: [80]
+    ports:
+      - port: 80
+        label: SQL Injection Lab
     tags:
       - SQL-Injection
       - Custom-Lab
@@ -109,7 +172,9 @@ apps:
   #   repo: https://github.com/example/vulnerable-app.git
   #   ref: main
   #   dockerfile_path: ./Dockerfile
-  #   ports: [3000]
+  #   ports:
+  #     - port: 3000
+  #       label: Web UI
   #   tags:
   #     - Custom
   #   description: "Git-based vulnerable lab - cloned and built from repository"

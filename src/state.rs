@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::error::{Result, VulnPkgError};
+use crate::manifest::Protocol;
 
 const STATE_DIR: &str = ".vuln-pkg";
 const MANIFESTS_DIR: &str = "manifests";
@@ -10,6 +11,10 @@ const IMAGES_DIR: &str = "images";
 const REPOS_DIR: &str = "repos";
 const STATE_FILE: &str = "state.json";
 const ACCEPTED_MANIFESTS_FILE: &str = "accepted-manifests.json";
+
+/// Port allocation range for TCP/UDP direct mappings
+const PORT_RANGE_START: u16 = 40000;
+const PORT_RANGE_END: u16 = 49999;
 
 /// Information about an accepted manifest
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,11 +54,39 @@ pub enum ImageSource {
     Git,
 }
 
+/// Represents an allocated port mapping for TCP/UDP protocols
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AllocatedPort {
+    /// Container port
+    pub container_port: u16,
+    /// Host port (from allocation range)
+    pub host_port: u16,
+    /// Protocol (tcp/udp)
+    pub protocol: Protocol,
+    /// Optional label for this port
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+/// Endpoint information for display
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct Endpoint {
+    /// The URL or connection string
+    pub url: String,
+    /// Protocol type
+    pub protocol: Protocol,
+    /// Optional label
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppState {
     pub installed: bool,
     pub running: bool,
     pub container_id: Option<String>,
+    /// HTTP hostnames (for Traefik-routed ports)
     pub hostnames: Vec<String>,
 
     /// How the image was obtained
@@ -71,6 +104,10 @@ pub struct AppState {
     /// Timestamp of last build (ISO 8601 format)
     #[serde(default)]
     pub built_at: Option<String>,
+
+    /// Allocated ports for TCP/UDP direct mappings
+    #[serde(default)]
+    pub allocated_ports: Vec<AllocatedPort>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -86,6 +123,38 @@ impl State {
             apps: HashMap::new(),
             network_id: None,
             traefik_container_id: None,
+        }
+    }
+
+    /// Get all currently allocated host ports across all apps
+    pub fn allocated_host_ports(&self) -> Vec<u16> {
+        self.apps
+            .values()
+            .flat_map(|app| app.allocated_ports.iter().map(|p| p.host_port))
+            .collect()
+    }
+
+    /// Allocate a new host port from the range
+    /// Returns None if no ports are available
+    #[allow(dead_code)]
+    pub fn allocate_port(&self) -> Option<u16> {
+        let used_ports = self.allocated_host_ports();
+        (PORT_RANGE_START..=PORT_RANGE_END).find(|port| !used_ports.contains(port))
+    }
+
+    /// Allocate multiple ports from the range
+    /// Returns None if not enough ports are available
+    pub fn allocate_ports(&self, count: usize) -> Option<Vec<u16>> {
+        let used_ports = self.allocated_host_ports();
+        let available: Vec<u16> = (PORT_RANGE_START..=PORT_RANGE_END)
+            .filter(|port| !used_ports.contains(port))
+            .take(count)
+            .collect();
+
+        if available.len() == count {
+            Some(available)
+        } else {
+            None
         }
     }
 }

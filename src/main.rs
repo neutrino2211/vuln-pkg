@@ -13,8 +13,8 @@ use cli::{Cli, Commands, ManifestCommands};
 use docker::DockerManager;
 use error::{Result, VulnPkgError};
 use manifest::{Manifest, PackageType};
-use output::Output;
-use state::{ImageSource, StateManager};
+use output::{Output, StatusInfo};
+use state::{AllocatedPort, ImageSource, StateManager};
 
 /// Generate a sslip.io domain from an IP address for zero-config DNS resolution
 /// e.g., 127.0.0.1 -> "127.0.0.1.sslip.io"
@@ -370,12 +370,13 @@ async fn cmd_run(
             return Err(VulnPkgError::AppAlreadyRunning(app_name.to_string()));
         }
 
-        // Container exists but is stopped - ensure Traefik is running first
+        // Container exists but is stopped - ensure Traefik is running first (if has HTTP ports)
         output.info("Ensuring vuln-pkg network exists");
         let network_id = docker.ensure_network().await?;
         state.network_id = Some(network_id.clone());
 
-        if docker.is_traefik_running().await?.is_none() {
+        let has_http_ports = !app.http_ports().is_empty();
+        if has_http_ports && docker.is_traefik_running().await?.is_none() {
             output.info("Starting Traefik reverse proxy");
             let traefik_id = docker
                 .start_traefik(&network_id, domain, https, output)
@@ -396,23 +397,26 @@ async fn cmd_run(
         app_state.running = true;
         app_state.container_id = Some(container_id);
 
-        // Regenerate hostnames based on app ports
-        let hostnames: Vec<String> = app
-            .ports
+        // Regenerate HTTP hostnames
+        let http_ports = app.http_ports();
+        let hostnames: Vec<String> = http_ports
             .iter()
             .enumerate()
-            .map(|(i, port)| {
+            .map(|(i, port_config)| {
                 if i == 0 {
                     format!("{}.{}", app.name, domain)
                 } else {
-                    format!("{}-{}.{}", app.name, port, domain)
+                    format!("{}-{}.{}", app.name, port_config.port, domain)
                 }
             })
             .collect();
         app_state.hostnames = hostnames.clone();
+
+        // Get existing allocated ports (they should still be valid)
+        let allocated_ports = app_state.allocated_ports.clone();
         state_mgr.save_state(&state)?;
 
-        output.app_running(app, &hostnames, domain, https);
+        output.app_running(app, &hostnames, &allocated_ports, domain, https);
         return Ok(());
     }
 
@@ -432,8 +436,9 @@ async fn cmd_run(
     let network_id = docker.ensure_network().await?;
     state.network_id = Some(network_id.clone());
 
-    // Ensure Traefik is running
-    if docker.is_traefik_running().await?.is_none() {
+    // Ensure Traefik is running (only needed for HTTP ports)
+    let has_http_ports = !app.http_ports().is_empty();
+    if has_http_ports && docker.is_traefik_running().await?.is_none() {
         output.info("Starting Traefik reverse proxy");
         let traefik_id = docker
             .start_traefik(&network_id, domain, https, output)
@@ -445,10 +450,31 @@ async fn cmd_run(
         ));
     }
 
-    // Create and start container with Traefik labels
+    // Allocate ports for TCP/UDP direct mappings
+    let direct_ports = app.direct_ports();
+    let allocated_ports: Vec<AllocatedPort> = if !direct_ports.is_empty() {
+        let host_ports = state.allocate_ports(direct_ports.len()).ok_or_else(|| {
+            VulnPkgError::State("No available ports in allocation range".to_string())
+        })?;
+
+        direct_ports
+            .iter()
+            .zip(host_ports.iter())
+            .map(|(port_config, &host_port)| AllocatedPort {
+                container_port: port_config.port,
+                host_port,
+                protocol: port_config.protocol.clone(),
+                label: port_config.label.clone(),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // Create and start container
     output.info(&format!("Creating container for {}", app.name));
     let (container_id, hostnames) = docker
-        .create_container(app, &network_id, domain, https)
+        .create_container(app, &network_id, domain, https, &allocated_ports)
         .await?;
 
     output.info("Starting container");
@@ -460,9 +486,10 @@ async fn cmd_run(
     app_state.running = true;
     app_state.container_id = Some(container_id);
     app_state.hostnames = hostnames.clone();
+    app_state.allocated_ports = allocated_ports.clone();
     state_mgr.save_state(&state)?;
 
-    output.app_running(app, &hostnames, domain, https);
+    output.app_running(app, &hostnames, &allocated_ports, domain, https);
 
     Ok(())
 }
@@ -633,7 +660,7 @@ async fn cmd_status(state_mgr: &StateManager, output: &Output) -> Result<()> {
     let state = state_mgr.load_state()?;
     let docker = DockerManager::new()?;
 
-    let mut status_info: Vec<(String, bool, Option<String>, Vec<String>)> = Vec::new();
+    let mut status_info: Vec<StatusInfo> = Vec::new();
 
     for (name, app_state) in &state.apps {
         let running = if let Some(ref container_id) = app_state.container_id {
@@ -650,6 +677,7 @@ async fn cmd_status(state_mgr: &StateManager, output: &Output) -> Result<()> {
             running,
             app_state.container_id.clone(),
             app_state.hostnames.clone(),
+            app_state.allocated_ports.clone(),
         ));
     }
 

@@ -1,8 +1,17 @@
 use colored::Colorize;
 use serde::Serialize;
 
-use crate::manifest::{App, Manifest};
-use crate::state::{AcceptedManifests, AppState};
+use crate::manifest::{App, Manifest, Protocol};
+use crate::state::{AcceptedManifests, AllocatedPort, AppState};
+
+/// Type alias for status info tuple to avoid clippy::type_complexity warning
+pub type StatusInfo = (
+    String,
+    bool,
+    Option<String>,
+    Vec<String>,
+    Vec<AllocatedPort>,
+);
 
 pub struct Output {
     json: bool,
@@ -54,13 +63,20 @@ impl Output {
     pub fn list_apps(&self, apps: &[App], states: &std::collections::HashMap<String, AppState>) {
         if self.json {
             #[derive(Serialize)]
+            struct PortInfo {
+                port: u16,
+                protocol: String,
+                label: Option<String>,
+            }
+
+            #[derive(Serialize)]
             struct AppInfo {
                 name: String,
                 version: String,
                 image: String,
                 description: String,
                 tags: Vec<String>,
-                ports: Vec<u16>,
+                ports: Vec<PortInfo>,
                 installed: bool,
                 running: bool,
             }
@@ -75,7 +91,15 @@ impl Output {
                         image: app.effective_image(),
                         description: app.description.clone(),
                         tags: app.tags.clone(),
-                        ports: app.ports.clone(),
+                        ports: app
+                            .port_configs()
+                            .into_iter()
+                            .map(|p| PortInfo {
+                                port: p.port,
+                                protocol: p.protocol.to_string(),
+                                label: p.label,
+                            })
+                            .collect(),
                         installed: state.map(|s| s.installed).unwrap_or(false),
                         running: state.map(|s| s.running).unwrap_or(false),
                     }
@@ -110,26 +134,50 @@ impl Output {
                 }
 
                 println!("    Image: {}", app.effective_image().cyan());
-                println!(
-                    "    Ports: {}",
-                    app.ports
-                        .iter()
-                        .map(|p| p.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
+
+                // Show ports with protocol info
+                let port_strs: Vec<String> = app
+                    .port_configs()
+                    .iter()
+                    .map(|p| {
+                        let label = p
+                            .label
+                            .as_ref()
+                            .map(|l| format!(" ({})", l))
+                            .unwrap_or_default();
+                        match p.protocol {
+                            Protocol::Http => format!("{}{}", p.port, label),
+                            Protocol::Tcp => format!("{}/tcp{}", p.port, label),
+                            Protocol::Udp => format!("{}/udp{}", p.port, label),
+                        }
+                    })
+                    .collect();
+                println!("    Ports: {}", port_strs.join(", "));
 
                 if !app.tags.is_empty() {
                     println!("    Tags:  {}", app.tags.join(", ").yellow());
                 }
 
-                // Show hostnames if running
+                // Show endpoints if running
                 if let Some(s) = state
                     && s.running
-                    && !s.hostnames.is_empty()
                 {
+                    // HTTP hostnames
                     for hostname in &s.hostnames {
                         println!("    URL: {}", format!("http://{}", hostname).cyan());
+                    }
+                    // TCP/UDP allocated ports
+                    for alloc in &s.allocated_ports {
+                        let label = alloc
+                            .label
+                            .as_ref()
+                            .map(|l| format!(" ({})", l))
+                            .unwrap_or_default();
+                        println!(
+                            "    {}: {}",
+                            alloc.protocol.to_string().to_uppercase(),
+                            format!("localhost:{}{}", alloc.host_port, label).cyan()
+                        );
                     }
                 }
 
@@ -138,24 +186,44 @@ impl Output {
         }
     }
 
-    pub fn status(&self, apps: &[(String, bool, Option<String>, Vec<String>)]) {
+    pub fn status(&self, apps: &[StatusInfo]) {
         if self.json {
+            #[derive(Serialize)]
+            struct AllocatedPortInfo {
+                container_port: u16,
+                host_port: u16,
+                protocol: String,
+                label: Option<String>,
+            }
+
             #[derive(Serialize)]
             struct StatusInfo {
                 name: String,
                 running: bool,
                 container_id: Option<String>,
                 hostnames: Vec<String>,
+                allocated_ports: Vec<AllocatedPortInfo>,
             }
 
             let info: Vec<StatusInfo> = apps
                 .iter()
-                .map(|(name, running, container_id, hostnames)| StatusInfo {
-                    name: name.clone(),
-                    running: *running,
-                    container_id: container_id.clone(),
-                    hostnames: hostnames.clone(),
-                })
+                .map(
+                    |(name, running, container_id, hostnames, allocated_ports)| StatusInfo {
+                        name: name.clone(),
+                        running: *running,
+                        container_id: container_id.clone(),
+                        hostnames: hostnames.clone(),
+                        allocated_ports: allocated_ports
+                            .iter()
+                            .map(|p| AllocatedPortInfo {
+                                container_port: p.container_port,
+                                host_port: p.host_port,
+                                protocol: p.protocol.to_string(),
+                                label: p.label.clone(),
+                            })
+                            .collect(),
+                    },
+                )
                 .collect();
 
             self.json(&info);
@@ -168,7 +236,7 @@ impl Output {
             println!("\n{}", "Application Status".bold().underline());
             println!();
 
-            for (name, running, container_id, hostnames) in apps {
+            for (name, running, container_id, hostnames, allocated_ports) in apps {
                 let status = if *running {
                     "RUNNING".green().bold()
                 } else {
@@ -182,10 +250,23 @@ impl Output {
                     println!("    Container: {}", short_id);
                 }
 
-                if !hostnames.is_empty() {
-                    for hostname in hostnames {
-                        println!("    URL: {}", format!("http://{}", hostname).cyan());
-                    }
+                // HTTP endpoints
+                for hostname in hostnames {
+                    println!("    URL: {}", format!("http://{}", hostname).cyan());
+                }
+
+                // TCP/UDP endpoints
+                for alloc in allocated_ports {
+                    let label = alloc
+                        .label
+                        .as_ref()
+                        .map(|l| format!(" ({})", l))
+                        .unwrap_or_default();
+                    println!(
+                        "    {}: {}",
+                        alloc.protocol.to_string().to_uppercase(),
+                        format!("localhost:{}{}", alloc.host_port, label).cyan()
+                    );
                 }
 
                 println!();
@@ -215,13 +296,29 @@ impl Output {
         }
     }
 
-    pub fn app_running(&self, app: &App, hostnames: &[String], domain: &str, https: bool) {
+    pub fn app_running(
+        &self,
+        app: &App,
+        hostnames: &[String],
+        allocated_ports: &[AllocatedPort],
+        domain: &str,
+        https: bool,
+    ) {
         if self.json {
+            #[derive(Serialize)]
+            struct AllocatedPortInfo {
+                container_port: u16,
+                host_port: u16,
+                protocol: String,
+                label: Option<String>,
+            }
+
             #[derive(Serialize)]
             struct RunResult<'a> {
                 status: &'static str,
                 app: &'a str,
                 hostnames: &'a [String],
+                allocated_ports: Vec<AllocatedPortInfo>,
                 domain: &'a str,
                 https: bool,
             }
@@ -229,20 +326,53 @@ impl Output {
                 status: "running",
                 app: &app.name,
                 hostnames,
+                allocated_ports: allocated_ports
+                    .iter()
+                    .map(|p| AllocatedPortInfo {
+                        container_port: p.container_port,
+                        host_port: p.host_port,
+                        protocol: p.protocol.to_string(),
+                        label: p.label.clone(),
+                    })
+                    .collect(),
                 domain,
                 https,
             });
         } else {
             self.success(&format!("Started {}", app.name.bold()));
             println!();
-            let scheme = if https { "https" } else { "http" };
-            for hostname in hostnames {
+
+            // Show HTTP endpoints
+            if !hostnames.is_empty() {
+                let scheme = if https { "https" } else { "http" };
+                for hostname in hostnames {
+                    println!(
+                        "  {} {}",
+                        "->".green(),
+                        format!("{}://{}", scheme, hostname).cyan()
+                    );
+                }
+            }
+
+            // Show TCP/UDP endpoints
+            for alloc in allocated_ports {
+                let label = alloc
+                    .label
+                    .as_ref()
+                    .map(|l| format!(" ({})", l))
+                    .unwrap_or_default();
+                let protocol_str = alloc.protocol.to_string().to_uppercase();
+                let hostname = format!("{}.{}", app.name, domain);
                 println!(
-                    "  {} {}",
+                    "  {} {} {}:{}{}",
                     "->".green(),
-                    format!("{}://{}", scheme, hostname).cyan()
+                    format!("[{}]", protocol_str).yellow(),
+                    hostname,
+                    alloc.host_port,
+                    label.dimmed()
                 );
             }
+
             println!();
         }
     }
@@ -294,13 +424,20 @@ impl Output {
             }
 
             #[derive(Serialize)]
+            struct PortInfo {
+                port: u16,
+                protocol: String,
+                label: Option<String>,
+            }
+
+            #[derive(Serialize)]
             struct AppInfo {
                 name: String,
                 version: String,
                 image: String,
                 description: String,
                 tags: Vec<String>,
-                ports: Vec<u16>,
+                ports: Vec<PortInfo>,
                 installed: bool,
                 running: bool,
             }
@@ -315,7 +452,15 @@ impl Output {
                         image: app.effective_image(),
                         description: app.description.clone(),
                         tags: app.tags.clone(),
-                        ports: app.ports.clone(),
+                        ports: app
+                            .port_configs()
+                            .into_iter()
+                            .map(|p| PortInfo {
+                                port: p.port,
+                                protocol: p.protocol.to_string(),
+                                label: p.label,
+                            })
+                            .collect(),
                         installed: state.map(|s| s.installed).unwrap_or(false),
                         running: state.map(|s| s.running).unwrap_or(false),
                     }
@@ -359,26 +504,50 @@ impl Output {
                 }
 
                 println!("    Image: {}", app.effective_image().cyan());
-                println!(
-                    "    Ports: {}",
-                    app.ports
-                        .iter()
-                        .map(|p| p.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
+
+                // Show ports with protocol info
+                let port_strs: Vec<String> = app
+                    .port_configs()
+                    .iter()
+                    .map(|p| {
+                        let label = p
+                            .label
+                            .as_ref()
+                            .map(|l| format!(" ({})", l))
+                            .unwrap_or_default();
+                        match p.protocol {
+                            Protocol::Http => format!("{}{}", p.port, label),
+                            Protocol::Tcp => format!("{}/tcp{}", p.port, label),
+                            Protocol::Udp => format!("{}/udp{}", p.port, label),
+                        }
+                    })
+                    .collect();
+                println!("    Ports: {}", port_strs.join(", "));
 
                 if !app.tags.is_empty() {
                     println!("    Tags:  {}", app.tags.join(", ").yellow());
                 }
 
-                // Show hostnames if running
+                // Show endpoints if running
                 if let Some(s) = state
                     && s.running
-                    && !s.hostnames.is_empty()
                 {
+                    // HTTP hostnames
                     for hostname in &s.hostnames {
                         println!("    URL: {}", format!("http://{}", hostname).cyan());
+                    }
+                    // TCP/UDP allocated ports
+                    for alloc in &s.allocated_ports {
+                        let label = alloc
+                            .label
+                            .as_ref()
+                            .map(|l| format!(" ({})", l))
+                            .unwrap_or_default();
+                        println!(
+                            "    {}: {}",
+                            alloc.protocol.to_string().to_uppercase(),
+                            format!("localhost:{}{}", alloc.host_port, label).cyan()
+                        );
                     }
                 }
 

@@ -16,9 +16,9 @@ use git2::Repository;
 use tar::Builder;
 
 use crate::error::{Result, VulnPkgError};
-use crate::manifest::App;
+use crate::manifest::{App, Protocol};
 use crate::output::Output;
-use crate::state::StateManager;
+use crate::state::{AllocatedPort, StateManager};
 
 const CONTAINER_LABEL: &str = "vuln-pkg";
 const NETWORK_NAME: &str = "vuln-pkg";
@@ -575,31 +575,50 @@ impl DockerManager {
 
     // ==================== Container Management ====================
 
+    /// Create a container with support for both HTTP (Traefik) and TCP/UDP (direct) ports
+    ///
+    /// # Arguments
+    /// * `app` - Application definition from manifest
+    /// * `network_id` - Docker network ID for vuln-pkg network
+    /// * `domain` - Domain suffix for HTTP hostnames
+    /// * `https` - Whether to enable HTTPS for HTTP ports
+    /// * `allocated_ports` - Pre-allocated port mappings for TCP/UDP ports
+    ///
+    /// # Returns
+    /// * Container ID and list of HTTP hostnames
     pub async fn create_container(
         &self,
         app: &App,
         network_id: &str,
         domain: &str,
         https: bool,
+        allocated_ports: &[AllocatedPort],
     ) -> Result<(String, Vec<String>)> {
         let container_name = format!("vuln-pkg-{}", app.name);
 
-        // Build Traefik labels for each port
+        // Build Traefik labels for HTTP ports only
         let mut labels = HashMap::new();
         labels.insert(CONTAINER_LABEL.to_string(), app.name.clone());
-        labels.insert("traefik.enable".to_string(), "true".to_string());
+
+        let http_ports = app.http_ports();
+        let has_http_ports = !http_ports.is_empty();
+
+        // Only enable Traefik if there are HTTP ports
+        if has_http_ports {
+            labels.insert("traefik.enable".to_string(), "true".to_string());
+        }
 
         let mut hostnames = Vec::new();
 
-        for (i, &port) in app.ports.iter().enumerate() {
-            let (router_name, subdomain) = if i == 0 {
-                // First port gets the app name
+        for (http_port_index, port_config) in http_ports.iter().enumerate() {
+            let (router_name, subdomain) = if http_port_index == 0 {
+                // First HTTP port gets the app name
                 (app.name.clone(), app.name.clone())
             } else {
-                // Additional ports get app-port suffix
+                // Additional HTTP ports get app-port suffix
                 (
-                    format!("{}-{}", app.name, port),
-                    format!("{}-{}", app.name, port),
+                    format!("{}-{}", app.name, port_config.port),
+                    format!("{}-{}", app.name, port_config.port),
                 )
             };
 
@@ -624,7 +643,7 @@ impl DockerManager {
                     "traefik.http.services.{}.loadbalancer.server.port",
                     router_name
                 ),
-                port.to_string(),
+                port_config.port.to_string(),
             );
 
             // HTTPS router if enabled
@@ -649,6 +668,26 @@ impl DockerManager {
             }
         }
 
+        // Build port bindings for TCP/UDP ports (direct mapping)
+        let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
+
+        for alloc in allocated_ports {
+            let protocol_suffix = match alloc.protocol {
+                Protocol::Tcp => "tcp",
+                Protocol::Udp => "udp",
+                Protocol::Http => continue, // HTTP ports don't need direct mapping
+            };
+
+            let container_port_key = format!("{}/{}", alloc.container_port, protocol_suffix);
+            port_bindings.insert(
+                container_port_key,
+                Some(vec![PortBinding {
+                    host_ip: Some("0.0.0.0".to_string()),
+                    host_port: Some(alloc.host_port.to_string()),
+                }]),
+            );
+        }
+
         // Network config - connect to vuln-pkg network
         let mut endpoints_config = HashMap::new();
         endpoints_config.insert(
@@ -660,6 +699,11 @@ impl DockerManager {
         );
 
         let host_config = HostConfig {
+            port_bindings: if port_bindings.is_empty() {
+                None
+            } else {
+                Some(port_bindings)
+            },
             ..Default::default()
         };
 
