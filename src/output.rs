@@ -52,6 +52,12 @@ impl Output {
         }
     }
 
+    pub fn build_log(&self, msg: &str) {
+        if !self.json {
+            println!("{} {}", "   |".dimmed(), msg);
+        }
+    }
+
     pub fn json<T: Serialize>(&self, data: &T) {
         if self.json
             && let Ok(json) = serde_json::to_string_pretty(data)

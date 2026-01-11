@@ -393,7 +393,7 @@ impl DockerManager {
                     if let Some(stream_text) = info.stream {
                         let text = stream_text.trim();
                         if !text.is_empty() {
-                            output.debug(text);
+                            output.build_log(text);
                         }
                     }
                     if let Some(error) = info.error {

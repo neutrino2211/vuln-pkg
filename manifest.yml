@@ -2,9 +2,9 @@
 # Host this file and point vuln-pkg to it with --manifest-url
 
 meta:
-  author: "Your Name"
-  email: "your.email@example.com"
-  url: "https://github.com/your-username/your-manifest"
+  author: "Mainasara Al-amin Tsowa"
+  email: "tsowamainasara@gmail.com"
+  url: "https://github.com/neutrino2211/vuln-kg"
   description: "A collection of vulnerable applications for security training"
 
 apps:
@@ -48,16 +48,6 @@ apps:
       - OWASP-Top-10
     description: "OWASP WebGoat - Java-based deliberately insecure application"
 
-  - name: mutillidae
-    version: "2.6"
-    image: citizenstig/nowasp
-    ports: [80]
-    tags:
-      - SQL-Injection
-      - XSS
-      - LDAP-Injection
-    description: "NOWASP Mutillidae II - Free, open source web app for security training"
-
   - name: hackazon
     version: "1.0"
     image: pierrickv/hackazon
@@ -71,14 +61,6 @@ apps:
       - SQL-Injection
     description: "Hackazon - Vulnerable test e-commerce site with REST API"
 
-  - name: bwapp
-    version: "2.2"
-    image: raesene/bwapp
-    ports: [80]
-    tags:
-      - OWASP-Top-10
-    description: "bWAPP - Buggy Web Application with 100+ vulnerabilities"
-
   - name: vampi
     version: "1.0"
     image: erev0s/vampi
@@ -89,6 +71,44 @@ apps:
       - API-Security
       - OWASP-API-Top-10
     description: "VAmPI - Vulnerable REST API for API security testing"
+
+  - name: react2shell
+    version: "1.0"
+    type: dockerfile
+    dockerfile: |
+      FROM node:20-alpine AS build-env
+      WORKDIR /
+      RUN npx create-next-app@16.0.1 app --app --ts --yes && cd app && npm run build
+      FROM node:20-alpine
+      COPY --from=build-env /app/package.json /app/package.json
+      COPY --from=build-env /app/package-lock.json /app/package-lock.json
+      COPY --from=build-env /app/node_modules /app/node_modules
+      COPY --from=build-env /app/.next /app/.next
+      WORKDIR /app
+      EXPOSE 3000
+      CMD ["npm", "start"]
+    ports:
+      - port: 3000
+        label: React2Shell exposed port
+    tags:
+      - CVE-2025-55182
+      - React2Shell
+    description: "Custom SQL injection lab - built from inline Dockerfile"
+
+
+  # Example: MongoDB with MongoBleed vulnerability (TCP protocol)
+  - name: mongobleed
+    version: "8.0.16"
+    image: mongo:8.0.16
+    ports:
+      - port: 27017
+        protocol: tcp
+        label: MongoDB
+    tags:
+      - CVE-2025-14847
+      - Memory-Leak
+    description: "MongoDB with MongoBleed vulnerability - memory disclosure via zlib"
+
 
   # ==================== TCP/UDP Protocol Examples ====================
 
@@ -139,22 +159,22 @@ apps:
   # ==================== Custom Package Examples ====================
 
   # Example: Dockerfile-based package (inline Dockerfile)
-  - name: custom-sqli-lab
-    version: "1.0"
-    type: dockerfile
-    dockerfile: |
-      FROM php:8.0-apache
-      RUN docker-php-ext-install mysqli pdo pdo_mysql
-      COPY index.php /var/www/html/
-      RUN chmod 777 /var/www/html
-      EXPOSE 80
-    ports:
-      - port: 80
-        label: SQL Injection Lab
-    tags:
-      - SQL-Injection
-      - Custom-Lab
-    description: "Custom SQL injection lab - built from inline Dockerfile"
+  # - name: custom-sqli-lab
+  #   version: "1.0"
+  #   type: dockerfile
+  #   dockerfile: |
+  #     FROM php:8.0-apache
+  #     RUN docker-php-ext-install mysqli pdo pdo_mysql
+  #     COPY index.php /var/www/html/
+  #     RUN chmod 777 /var/www/html
+  #     EXPOSE 80
+  #   ports:
+  #     - port: 80
+  #       label: SQL Injection Lab
+  #   tags:
+  #     - SQL-Injection
+  #     - Custom-Lab
+  #   description: "Custom SQL injection lab - built from inline Dockerfile"
 
   # Example: Dockerfile-based package (remote Dockerfile)
   # - name: remote-vuln-app
